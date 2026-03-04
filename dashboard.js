@@ -1532,17 +1532,18 @@ function computeDocentScore(locationFilter) {
     metrics.M6 = +(teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100).toFixed(1);
     metrics.M7 = +(teachers.filter(t => t.lateUren > 0).length / n * 100).toFixed(1);
 
-    // M8: docenten die pendelen en ALLE bewegingen mét reistijd
-    const pendelMet = teachers.filter(t =>
+    // M8/M9: pendel is schoolbreed, niet per locatie (pendelaars zitten per definitie op beide)
+    const allTeachers = state.docentMetrics.teachers;
+    const nAll = allTeachers.length;
+    const pendelMet = allTeachers.filter(t =>
         t.pendelt && (parseFloat(t.pendelZonderReistijd) || 0) === 0
     ).length;
-    metrics.M8 = +(pendelMet / n * 100).toFixed(1);
+    metrics.M8 = +(pendelMet / nAll * 100).toFixed(1);
 
-    // M9: docenten met ≥1 beweging zónder reistijd
-    const pendelZonder = teachers.filter(t =>
+    const pendelZonder = allTeachers.filter(t =>
         t.pendelt && (parseFloat(t.pendelZonderReistijd) || 0) > 0
     ).length;
-    metrics.M9 = +(pendelZonder / n * 100).toFixed(1);
+    metrics.M9 = +(pendelZonder / nAll * 100).toFixed(1);
 
     // M10: docenten die minstens 1x lesgeeft aan klas/cluster >29 leerlingen
     const groteklas = teachers.filter(t => {
@@ -1812,21 +1813,6 @@ function renderDocentMetricTable() {
             : 'Metric-overzicht';
     }
 
-    const metricColor = (key, val) => {
-        const w = DOCENT_METRICS[key].weight;
-        if (w > 0) {
-            // Positief: hoog = goed
-            if (val >= 70) return 'metric-good';
-            if (val >= 40) return 'metric-ok';
-            return 'metric-bad';
-        } else {
-            // Negatief: laag = goed
-            if (val <= 2) return 'metric-good';
-            if (val <= 10) return 'metric-ok';
-            return 'metric-bad';
-        }
-    };
-
     let rows = '';
     for (const [key, def] of Object.entries(DOCENT_METRICS)) {
         const weightDisplay = def.weight > 0 ? `+${def.weight}` : def.weight;
@@ -1839,7 +1825,7 @@ function renderDocentMetricTable() {
                 val = state.docentScoresByLocation[loc]?.metrics?.[key] ?? null;
             }
             if (val == null) return '<td class="num">-</td>';
-            return `<td class="num ${metricColor(key, val)}">${val}%</td>`;
+            return `<td class="num ${metricColor(def.weight, val)}">${val}%</td>`;
         }).join('');
 
         rows += `<tr>
@@ -2051,19 +2037,6 @@ function renderLeerlingMetricTable(tableId, headerId, bouw) {
             : `Metric-overzicht ${bouwLabel}`;
     }
 
-    const metricColor = (key, val) => {
-        const w = LEERLING_METRICS[key].weight;
-        if (w > 0) {
-            if (val >= 70) return 'metric-good';
-            if (val >= 40) return 'metric-ok';
-            return 'metric-bad';
-        } else {
-            if (val <= 2) return 'metric-good';
-            if (val <= 10) return 'metric-ok';
-            return 'metric-bad';
-        }
-    };
-
     let rows = '';
     for (const [key, def] of Object.entries(LEERLING_METRICS)) {
         const weightDisplay = def.weight > 0 ? `+${def.weight}` : def.weight;
@@ -2076,7 +2049,7 @@ function renderLeerlingMetricTable(tableId, headerId, bouw) {
                 val = state.leerlingScoresByLocation?.[loc]?.[bouw]?.metrics?.[key] ?? null;
             }
             if (val == null) return '<td class="num">-</td>';
-            return `<td class="num ${metricColor(key, val)}">${val}%</td>`;
+            return `<td class="num ${metricColor(def.weight, val)}">${val}%</td>`;
         }).join('');
 
         rows += `<tr>
@@ -2299,6 +2272,24 @@ function renderAchterafDocent(m) {
 // ================================================================
 // HELPER FUNCTIONS
 // ================================================================
+
+/**
+ * Metric table cell color based on weight direction.
+ * Positive weight: high % = good (green). Negative weight: high % = bad (red).
+ */
+function metricColor(weight, val) {
+    if (weight > 0) {
+        // Positief gewicht: hoog = goed
+        if (val >= 50) return 'metric-good';
+        if (val >= 25) return 'metric-ok';
+        return 'metric-bad';
+    } else {
+        // Negatief gewicht: laag = goed
+        if (val <= 5) return 'metric-good';
+        if (val <= 20) return 'metric-ok';
+        return 'metric-bad';
+    }
+}
 
 /**
  * Deduplicate pendel movements by day+from+to, keeping worst metReistijd.
