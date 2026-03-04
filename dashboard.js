@@ -22,13 +22,30 @@ const BLOKUUR_OK_SUBJECTS = new Set(['lo', 'bv', 'ckv', 'pws', 'pro']);
 const DAYS_SHORT = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
 const DAYS_LABELS = ['Ma', 'Di', 'Wo', 'Do', 'Vr'];
 
+// SGL website kleurenpalet
+const LOC_COLORS = {
+    // Base kleuren (docenten / overall)
+    sgl:      { line: 'rgba(65, 80, 158, 0.95)',  bg: 'rgba(65, 80, 158, 0.12)',  hex: '#41509E', text: '#41509E' },
+    athena:   { line: 'rgba(252, 195, 0, 0.90)',   bg: 'rgba(252, 195, 0, 0.12)',   hex: '#FCC300', text: '#B38A00' },
+    socrates: { line: 'rgba(183, 14, 12, 0.90)',   bg: 'rgba(183, 14, 12, 0.12)',   hex: '#B70E0C', text: '#B70E0C' },
+    // Lichte tint (onderbouw)
+    sglLight:      { line: 'rgba(123, 135, 191, 0.90)', hex: '#7B87BF', text: '#5E6CB0' },
+    athenaLight:   { line: 'rgba(253, 218, 99, 0.90)',  hex: '#FDDA63', text: '#C99B00' },
+    socratesLight: { line: 'rgba(224, 82, 80, 0.90)',   hex: '#E05250', text: '#D04040' },
+    // Donkere tint (bovenbouw)
+    sglDark:      { line: 'rgba(45, 56, 112, 0.95)',  hex: '#2D3870', text: '#2D3870' },
+    athenaDark:   { line: 'rgba(179, 138, 0, 0.95)',  hex: '#B38A00', text: '#8A6B00' },
+    socratesDark: { line: 'rgba(122, 9, 7, 0.95)',    hex: '#7A0907', text: '#7A0907' },
+};
+
+// Helper: locatie → kleur voor charts en kaarten
+function locColor(loc, bouw) {
+    const suffix = bouw === 'onderbouw' ? 'Light' : bouw === 'bovenbouw' ? 'Dark' : '';
+    const key = loc === 'alle' ? 'sgl' : loc.toLowerCase();
+    return LOC_COLORS[key + suffix] || LOC_COLORS[key] || LOC_COLORS.sgl;
+}
+
 const COLORS = {
-    primary: 'rgba(26, 82, 118, 0.8)',
-    primaryBg: 'rgba(26, 82, 118, 0.15)',
-    athena: 'rgba(41, 128, 185, 0.8)',
-    athenaBg: 'rgba(41, 128, 185, 0.15)',
-    socrates: 'rgba(39, 174, 96, 0.8)',
-    socratesBg: 'rgba(39, 174, 96, 0.15)',
     green: 'rgba(39, 174, 96, 0.8)',
     greenBg: 'rgba(39, 174, 96, 0.15)',
     orange: 'rgba(230, 126, 34, 0.8)',
@@ -38,23 +55,32 @@ const COLORS = {
 };
 
 // ================================================================
-// KEY INDICATORS — Streefwaarden met stoplicht-drempels
+// DOCENT METRICS — 9 gewogen metrics voor docentenscore
 // ================================================================
-const KEY_INDICATORS = {
-    D1: { label: 'Lokaalwissel buiten pauze', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
-    D2: { label: 'Tussenuren >2/week', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
-    D3: { label: 'Lokaalwissel in pauze', unit: '%', green: 10, orange: 30, higherIsBetter: false, category: 'docenten' },
-    D4: { label: 'Pendel zonder reistijd', unit: '%', green: 0, orange: 25, higherIsBetter: false, category: 'docenten' },
-    D5: { label: 'Late uren >1/week', unit: '%', green: 10, orange: 25, higherIsBetter: false, category: 'docenten' },
-    D6: { label: 'Vast lokaal', unit: '%', green: 80, orange: 50, higherIsBetter: true, category: 'docenten' },
-    D7: { label: 'Pendelmomenten/week', unit: '', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
-    O1: { label: 'Klassen met tussenuren', unit: '%', green: 5, orange: 20, higherIsBetter: false, category: 'onderbouw' },
-    O2: { label: 'Mentoruur aan rand', unit: '%', green: 90, orange: 70, higherIsBetter: true, category: 'onderbouw' },
-    O3: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'onderbouw' },
-    O4: { label: 'Klassen met 8e/9e uur', unit: '%', green: 10, orange: 30, higherIsBetter: false, category: 'onderbouw' },
-    B1: { label: 'Tussenuren ≥3 op dag', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
-    B2: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
-    B3: { label: 'Leerlingen met 9e uur', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'bovenbouw' },
+const DOCENT_METRICS = {
+    M1: { label: 'Vast lokaal hele week', weight: 5 },
+    M2: { label: 'Vast lokaal per dag', weight: 2 },
+    M3: { label: 'Lokaalwissel in pauze', weight: -2 },
+    M4: { label: 'Lokaalwissel buiten pauze', weight: -5 },
+    M5: { label: 'Geen tussenuren', weight: 3 },
+    M6: { label: 'Veel tussenuren (>2)', weight: -3 },
+    M7: { label: 'Late uren (8e/9e)', weight: -2 },
+    M8: { label: 'Pendel mét reistijd', weight: -2 },
+    M9: { label: 'Pendel zónder reistijd', weight: -10 },
+};
+
+// ================================================================
+// LEERLING METRICS — 8 gewogen metrics voor leerlingenscore
+// ================================================================
+const LEERLING_METRICS = {
+    L1: { label: 'Weinig tussenuren (<2/week)', weight: 5 },
+    L2: { label: 'Veel tussenuren (≥5/week)', weight: -4 },
+    L3: { label: 'Aaneengesloten tussenuren (≥2)', weight: -5 },
+    L4: { label: 'Eerste uur vrij (>2x/week)', weight: 1 },
+    L5: { label: 'Late uren (8e/9e)', weight: -2 },
+    L6: { label: 'Mentorles niet aan rand', weight: -2 },
+    L7: { label: 'Blokuur onwenselijk vak', weight: -2 },
+    L8: { label: 'Klas >29 leerlingen', weight: -3 },
 };
 
 // ================================================================
@@ -80,11 +106,8 @@ let state = {
     // Accumulated weekly data for averaging
     weeklyTeachers: {},    // weekCode -> teachers array (for computing averages)
     docentMetricsAvg: null, // averaged across all non-vacation weeks
-    // Key indicators
-    indicators: null,       // { D1: {value, score, status}, ... }
-    subtotals: null,        // { docenten: N, onderbouw: N, ... }
-    overallScore: null,     // 0-10
-    indicatorsByLocation: null,
+    // Leerling scores per locatie per bouw
+    leerlingScoresByLocation: null,
     // UI state
     leerlingSubFilter: 'alle',  // 'alle', 'onderbouw', 'bovenbouw'
     // Charts
@@ -245,6 +268,21 @@ function initCumLaudeUpload() {
             console.error('CumLaude parse error:', err);
         }
     });
+
+    // Auto-load cumlaude.xlsx als die in de dashboard-map staat
+    if (!state.cumLaudeStudents) {
+        fetch('cumlaude.xlsx')
+            .then(r => { if (!r.ok) throw new Error('niet gevonden'); return r.arrayBuffer(); })
+            .then(data => {
+                const wb = XLSX.read(data, { type: 'array' });
+                state.cumLaudeStudents = parseCumLaudeExcel(wb);
+                const count = Object.keys(state.cumLaudeStudents).length;
+                statusEl.textContent = `✓ ${count} leerlingen`;
+                label.classList.add('loaded');
+                console.log(`CumLaude auto-loaded: ${count} bovenbouw leerlingen`);
+            })
+            .catch(() => {}); // Stille fout als bestand niet bestaat
+    }
 }
 
 // ================================================================
@@ -840,6 +878,8 @@ function computeLeerlingMetrics() {
             laatsteUur: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
             vakSpreiding: [],
             blokuren: [],       // [{vak, day, slots, isOk}]
+            maxConsecGaps: 0,   // max opeenvolgende tussenuren op één dag
+            eersteUurVrijDagen: 0, // dagen waar eerste slot > 1
         };
 
         // Group by day
@@ -877,6 +917,24 @@ function computeLeerlingMetrics() {
             }
             klas.tussenuren.totaal += klas.tussenuren[day];
             klas.patternScore += klas.tussenuren[day] ** 2; // swiss cheese penalty
+
+            // Max consecutive gaps (for L3 metric)
+            if (slots.length >= 2) {
+                let consec = 0;
+                for (let s = slots[0] + 1; s < slots[slots.length - 1]; s++) {
+                    if (!slots.includes(s)) {
+                        consec++;
+                        klas.maxConsecGaps = Math.max(klas.maxConsecGaps, consec);
+                    } else {
+                        consec = 0;
+                    }
+                }
+            }
+
+            // Eerste uur vrij (for L4 metric)
+            if (slots.length > 0 && slots[0] > 1) {
+                klas.eersteUurVrijDagen++;
+            }
 
             // Laatste uur
             klas.laatsteUur[day] = slots[slots.length - 1];
@@ -1053,6 +1111,10 @@ function computeBovenbouwMetrics() {
             let tussenuren = 0;
             let lateUren8 = 0;
             let lateUren9 = 0;
+            let maxConsecGaps = 0;
+            let eersteUurVrijDagen = 0;
+            let mentorNietRand = false;
+            let heeftOnwenselijkBlok = false;
             const tussenPerDag = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
             const laatsteUur = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
 
@@ -1076,6 +1138,46 @@ function computeBovenbouwMetrics() {
                     if (s === 8) lateUren8++;
                     if (s >= 9) lateUren9++;
                 }
+
+                // Max consecutive gaps (for L3)
+                if (slots.length >= 2) {
+                    let consec = 0;
+                    for (let s = slots[0] + 1; s < slots[slots.length - 1]; s++) {
+                        if (!slots.includes(s)) {
+                            consec++;
+                            maxConsecGaps = Math.max(maxConsecGaps, consec);
+                        } else {
+                            consec = 0;
+                        }
+                    }
+                }
+
+                // Eerste uur vrij (for L4)
+                if (slots[0] > 1) eersteUurVrijDagen++;
+
+                // Mentor niet aan rand (for L6)
+                for (const a of dayLessons) {
+                    if (a.subjects.some(s => s.toLowerCase() === 'men' || s.toLowerCase() === 'mentor')) {
+                        if (a.slot !== slots[0] && a.slot !== slots[slots.length - 1]) {
+                            mentorNietRand = true;
+                        }
+                    }
+                }
+
+                // Onwenselijk blokuur (for L7)
+                const sortedDayLessons = [...dayLessons].sort((a, b) => a.slot - b.slot);
+                for (let i = 1; i < sortedDayLessons.length; i++) {
+                    const prev = sortedDayLessons[i - 1];
+                    const curr = sortedDayLessons[i];
+                    if (curr.slot === prev.slot + 1) {
+                        const shared = prev.subjects.filter(s =>
+                            curr.subjects.includes(s) && !EXCLUDED_SUBJECTS.has(s.toLowerCase())
+                        );
+                        if (shared.some(v => !BLOKUUR_OK_SUBJECTS.has(v.toLowerCase()))) {
+                            heeftOnwenselijkBlok = true;
+                        }
+                    }
+                }
             }
 
             perStudent.push({
@@ -1085,6 +1187,10 @@ function computeBovenbouwMetrics() {
                 lateUren8,
                 lateUren9,
                 laatsteUur,
+                maxConsecGaps,
+                eersteUurVrijDagen,
+                mentorNietRand,
+                heeftOnwenselijkBlok,
             });
         }
 
@@ -1132,6 +1238,14 @@ function computeBovenbouwMetrics() {
             studentsWithTussenuren: perStudent.filter(m => m.tussenuren > 0).length,
             studentsWithMaxTussen3Plus: perStudent.filter(ps => Math.max(...Object.values(ps.tussenPerDag)) >= 3).length,
             studentsWithUur9: perStudent.filter(ps => ps.lateUren9 > 0).length,
+            // Leerling metrics aggregaties
+            studentsWithFewTussenuren: perStudent.filter(ps => ps.tussenuren < 2).length,
+            studentsWithManyTussenuren: perStudent.filter(ps => ps.tussenuren >= 5).length,
+            studentsWithConsecGaps2Plus: perStudent.filter(ps => ps.maxConsecGaps >= 2).length,
+            studentsWithEersteVrij2Plus: perStudent.filter(ps => ps.eersteUurVrijDagen > 2).length,
+            studentsWithLateUren: perStudent.filter(ps => ps.lateUren8 + ps.lateUren9 > 0).length,
+            studentsWithMentorNietRand: perStudent.filter(ps => ps.mentorNietRand).length,
+            studentsWithOnwenselijkBlok: perStudent.filter(ps => ps.heeftOnwenselijkBlok).length,
         });
     }
 
@@ -1264,51 +1378,57 @@ function computeAchterafMetrics() {
 }
 
 // ================================================================
-// KEY INDICATOR SCORING
+// LEERLING SCORE BEREKENING
 // ================================================================
 
-function indicatorScore(value, greenMax, orangeMax, higherIsBetter) {
-    if (higherIsBetter) {
-        value = 100 - value;
-        const g = 100 - greenMax;
-        const o = 100 - orangeMax;
-        greenMax = g;
-        orangeMax = o;
-    }
-    if (value <= 0) return 10;
-    if (greenMax > 0 && value <= greenMax) {
-        return 10 - (value / greenMax) * 3; // 10 → 7
-    }
-    if (value <= orangeMax) {
-        const range = orangeMax - greenMax;
-        if (range <= 0) return 7;
-        return 7 - ((value - greenMax) / range) * 3; // 7 → 4
-    }
-    // Red zone: 4 → 0
-    const redRange = Math.max(orangeMax - greenMax, 1);
-    const t = Math.min((value - orangeMax) / redRange, 1);
-    return Math.max(4 - t * 4, 0);
-}
+function computeLeerlingScore(locationFilter, bouw) {
+    const lm = state.leerlingMetrics;
+    if (!lm) return { metrics: {}, score: 0 };
 
-function indicatorStatus(value, greenMax, orangeMax, higherIsBetter) {
-    if (higherIsBetter) {
-        if (value >= greenMax) return 'green';
-        if (value >= orangeMax) return 'orange';
-        return 'red';
-    }
-    if (value <= greenMax) return 'green';
-    if (value <= orangeMax) return 'orange';
-    return 'red';
-}
+    if (bouw === 'onderbouw') {
+        let klassen = lm.klassen;
+        if (locationFilter !== 'alle') klassen = klassen.filter(k => k.branchName === locationFilter);
+        const n = klassen.reduce((s, k) => s + k.avgSize, 0);
+        if (n === 0) return { metrics: {}, score: 0 };
 
-function computeIndicator(key, value) {
-    const def = KEY_INDICATORS[key];
-    const v = +value.toFixed(1);
-    return {
-        value: v,
-        score: +indicatorScore(v, def.green, def.orange, def.higherIsBetter).toFixed(1),
-        status: indicatorStatus(v, def.green, def.orange, def.higherIsBetter),
-    };
+        const m = {};
+        m.L1 = +(klassen.filter(k => k.tussenuren.totaal < 2).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L2 = +(klassen.filter(k => k.tussenuren.totaal >= 5).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L3 = +(klassen.filter(k => k.maxConsecGaps >= 2).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L4 = +(klassen.filter(k => k.eersteUurVrijDagen > 2).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L5 = +(klassen.filter(k => k.lateUren8 + k.lateUren9 > 0).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L6 = +(klassen.filter(k => k.mentorLessen > k.mentorAanRand).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L7 = +(klassen.filter(k => k.blokuren.some(b => !b.isOk)).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+        m.L8 = +(klassen.filter(k => k.avgSize > 29).reduce((s, k) => s + k.avgSize, 0) / n * 100).toFixed(1);
+
+        let score = 0;
+        for (const [key, val] of Object.entries(m)) score += val * LEERLING_METRICS[key].weight;
+        return { metrics: m, score: +score.toFixed(1) };
+    }
+
+    if (bouw === 'bovenbouw') {
+        if (!lm.bovenbouw) return { metrics: {}, score: 0 };
+        let klassen = lm.bovenbouw.klassen;
+        if (locationFilter !== 'alle') klassen = klassen.filter(k => k.branchName === locationFilter);
+        const n = klassen.reduce((s, k) => s + k.studentCount, 0);
+        if (n === 0) return { metrics: {}, score: 0 };
+
+        const m = {};
+        m.L1 = +(klassen.reduce((s, k) => s + (k.studentsWithFewTussenuren || 0), 0) / n * 100).toFixed(1);
+        m.L2 = +(klassen.reduce((s, k) => s + (k.studentsWithManyTussenuren || 0), 0) / n * 100).toFixed(1);
+        m.L3 = +(klassen.reduce((s, k) => s + (k.studentsWithConsecGaps2Plus || 0), 0) / n * 100).toFixed(1);
+        m.L4 = +(klassen.reduce((s, k) => s + (k.studentsWithEersteVrij2Plus || 0), 0) / n * 100).toFixed(1);
+        m.L5 = +(klassen.reduce((s, k) => s + (k.studentsWithLateUren || 0), 0) / n * 100).toFixed(1);
+        m.L6 = +(klassen.reduce((s, k) => s + (k.studentsWithMentorNietRand || 0), 0) / n * 100).toFixed(1);
+        m.L7 = +(klassen.reduce((s, k) => s + (k.studentsWithOnwenselijkBlok || 0), 0) / n * 100).toFixed(1);
+        m.L8 = +(klassen.filter(k => k.studentCount > 29).reduce((s, k) => s + k.studentCount, 0) / n * 100).toFixed(1);
+
+        let score = 0;
+        for (const [key, val] of Object.entries(m)) score += val * LEERLING_METRICS[key].weight;
+        return { metrics: m, score: +score.toFixed(1) };
+    }
+
+    return { metrics: {}, score: 0 };
 }
 
 function computeIndicators() {
@@ -1316,113 +1436,73 @@ function computeIndicators() {
     const lm = state.leerlingMetrics;
     if (!dm || !lm) return;
 
-    // Bereken voor alle drie locatiefilters
-    state.indicatorsByLocation = {};
+    // Docenten: 9 gewogen metrics per locatie
+    state.docentScoresByLocation = {};
     for (const loc of ['alle', 'Athena', 'Socrates']) {
-        state.indicatorsByLocation[loc] = computeIndicatorsForFilter(loc);
+        state.docentScoresByLocation[loc] = computeDocentScore(loc);
     }
 
-    // Backward compat: state.indicators/subtotals/overallScore = 'alle'
-    const alle = state.indicatorsByLocation.alle;
-    state.indicators = alle.indicators;
-    state.subtotals = alle.subtotals;
-    state.overallScore = alle.overall;
+    // Leerlingen: 8 gewogen metrics per locatie per bouw
+    state.leerlingScoresByLocation = {};
+    for (const loc of ['alle', 'Athena', 'Socrates']) {
+        state.leerlingScoresByLocation[loc] = {
+            onderbouw: computeLeerlingScore(loc, 'onderbouw'),
+            bovenbouw: computeLeerlingScore(loc, 'bovenbouw'),
+        };
+    }
 
     saveWeekScore();
-    console.log('Indicators per locatie:', {
-        SGL: state.indicatorsByLocation.alle.overall,
-        Athena: state.indicatorsByLocation.Athena.overall,
-        Socrates: state.indicatorsByLocation.Socrates.overall,
+    console.log('Scores:', {
+        docentSGL: state.docentScoresByLocation.alle.score,
+        obSGL: state.leerlingScoresByLocation.alle.onderbouw.score,
+        bvSGL: state.leerlingScoresByLocation.alle.bovenbouw.score,
     });
 }
 
-function computeIndicatorsForFilter(locationFilter) {
-    const dm = state.docentMetrics;
-    const lm = state.leerlingMetrics;
-
-    // Filter teachers by location
-    let teachers = dm.teachers;
+function computeDocentScore(locationFilter) {
+    let teachers = state.docentMetrics.teachers;
     if (locationFilter !== 'alle') {
         teachers = teachers.filter(t => {
             const appts = state.teacherAppointments[t.code] || [];
             return appts.some(a => a.locations.some(loc => state.locationToBranch[loc] === locationFilter));
         });
     }
-
-    // Filter onderbouw klassen
-    let klassen = lm.klassen;
-    if (locationFilter !== 'alle') {
-        klassen = klassen.filter(k => k.branchName === locationFilter);
-    }
-
-    // Filter bovenbouw klassen
-    let bvKlassen = lm.bovenbouw?.klassen;
-    if (bvKlassen && locationFilter !== 'alle') {
-        bvKlassen = bvKlassen.filter(k => k.branchName === locationFilter);
-    }
-
-    const indicators = {};
     const n = teachers.length;
+    if (n === 0) return { metrics: {}, score: 0 };
 
-    // === DOCENTEN ===
-    indicators.D1 = computeIndicator('D1', n > 0 ? teachers.filter(t => t.lokaalRating === 4).length / n * 100 : 0);
-    indicators.D2 = computeIndicator('D2', n > 0 ? teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100 : 0);
-    indicators.D3 = computeIndicator('D3', n > 0 ? teachers.filter(t => t.lokaalRating === 3).length / n * 100 : 0);
+    const metrics = {};
+    metrics.M1 = +(teachers.filter(t => t.lokaalRating === 1).length / n * 100).toFixed(1);
+    metrics.M2 = +(teachers.filter(t => t.lokaalRating === 2).length / n * 100).toFixed(1);
+    metrics.M3 = +(teachers.filter(t => t.lokaalRating === 3).length / n * 100).toFixed(1);
+    metrics.M4 = +(teachers.filter(t => t.lokaalRating === 4).length / n * 100).toFixed(1);
+    metrics.M5 = +(teachers.filter(t => t.tussenuren.totaal === 0).length / n * 100).toFixed(1);
+    metrics.M6 = +(teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100).toFixed(1);
+    metrics.M7 = +(teachers.filter(t => t.lateUren > 0).length / n * 100).toFixed(1);
 
-    // D4: % pendelbewegingen zonder reistijd
-    const totalMv = teachers.reduce((s, t) => s + (parseFloat(t.totalPendelBewegingen) || 0), 0);
-    const zonderRT = teachers.reduce((s, t) => s + (parseFloat(t.pendelZonderReistijd) || 0), 0);
-    indicators.D4 = computeIndicator('D4', totalMv > 0 ? zonderRT / totalMv * 100 : 0);
+    // M8: docenten die pendelen en ALLE bewegingen mét reistijd
+    const pendelMet = teachers.filter(t =>
+        t.pendelt && (parseFloat(t.pendelZonderReistijd) || 0) === 0
+    ).length;
+    metrics.M8 = +(pendelMet / n * 100).toFixed(1);
 
-    indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
-    indicators.D6 = computeIndicator('D6', n > 0 ? teachers.filter(t => t.lokaalRating === 1).length / n * 100 : 0);
+    // M9: docenten met ≥1 beweging zónder reistijd
+    const pendelZonder = teachers.filter(t =>
+        t.pendelt && (parseFloat(t.pendelZonderReistijd) || 0) > 0
+    ).length;
+    metrics.M9 = +(pendelZonder / n * 100).toFixed(1);
 
-    // D7: totaal pendelbewegingen per week
-    indicators.D7 = computeIndicator('D7', totalMv);
-
-    // === ONDERBOUW ===
-    const nk = klassen.length;
-    indicators.O1 = computeIndicator('O1', nk > 0 ? klassen.filter(k => k.tussenuren.totaal > 0).length / nk * 100 : 0);
-
-    const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
-    const randMentor = klassen.reduce((s, k) => s + k.mentorAanRand, 0);
-    indicators.O2 = computeIndicator('O2', totalMentor > 0 ? Math.round((randMentor / totalMentor) * 100) : 100);
-
-    const obBlok = klassen.flatMap(k => k.blokuren);
-    indicators.O3 = computeIndicator('O3', obBlok.length > 0 ? obBlok.filter(b => !b.isOk).length / obBlok.length * 100 : 0);
-    indicators.O4 = computeIndicator('O4', nk > 0 ? klassen.filter(k => k.lateUren8 + k.lateUren9 > 0).length / nk * 100 : 0);
-
-    // === BOVENBOUW ===
-    if (bvKlassen && bvKlassen.length > 0) {
-        const totalSt = bvKlassen.reduce((s, k) => s + k.studentCount, 0);
-        const mt3 = bvKlassen.reduce((s, k) => s + (k.studentsWithMaxTussen3Plus || 0), 0);
-        const u9 = bvKlassen.reduce((s, k) => s + (k.studentsWithUur9 || 0), 0);
-        indicators.B1 = computeIndicator('B1', totalSt > 0 ? mt3 / totalSt * 100 : 0);
-        const bvBlok = lm.bovenbouw.vakgroepBlokuren;
-        indicators.B2 = computeIndicator('B2', bvBlok.length > 0 ? bvBlok.filter(b => !b.isOk).length / bvBlok.length * 100 : 0);
-        indicators.B3 = computeIndicator('B3', totalSt > 0 ? u9 / totalSt * 100 : 0);
+    // Gewogen score
+    let score = 0;
+    for (const [key, val] of Object.entries(metrics)) {
+        score += val * DOCENT_METRICS[key].weight;
     }
 
-    // Subtotalen
-    const categories = {};
-    for (const [key, ind] of Object.entries(indicators)) {
-        const cat = KEY_INDICATORS[key].category;
-        if (!categories[cat]) categories[cat] = [];
-        categories[cat].push(ind.score);
-    }
-    const subtotals = {};
-    for (const [cat, scores] of Object.entries(categories)) {
-        subtotals[cat] = +(scores.reduce((s, v) => s + v, 0) / scores.length).toFixed(1);
-    }
-    const allScores = Object.values(indicators).map(i => i.score);
-    const overall = allScores.length > 0 ? +(allScores.reduce((s, v) => s + v, 0) / allScores.length).toFixed(1) : 0;
-
-    return { indicators, subtotals, overall };
+    return { metrics, score: +score.toFixed(1) };
 }
 
 function saveWeekScore() {
     const weekCode = state.currentWeekCode || document.getElementById('week-select')?.value;
-    if (!weekCode || !state.indicatorsByLocation) return;
+    if (!weekCode || !state.docentScoresByLocation) return;
 
     // Count total non-cancelled lessons this week (for vacation detection)
     let totalLessons = 0;
@@ -1435,19 +1515,16 @@ function saveWeekScore() {
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
     const entry = { week: weekCode, totalLessons };
     for (const loc of ['alle', 'Athena', 'Socrates']) {
-        const d = state.indicatorsByLocation[loc];
+        const ds = state.docentScoresByLocation[loc];
+        const ls = state.leerlingScoresByLocation?.[loc];
         entry[loc] = {
-            overall: d.overall,
-            docenten: d.subtotals.docenten ?? null,
-            leerlingen: +(((d.subtotals.onderbouw || 0) + (d.subtotals.bovenbouw || d.subtotals.onderbouw || 0)) / (d.subtotals.bovenbouw ? 2 : 1)).toFixed(1),
-            onderbouw: d.subtotals.onderbouw ?? null,
-            bovenbouw: d.subtotals.bovenbouw ?? null,
+            docentScore: ds.score,
+            docentMetrics: { ...ds.metrics },
+            onderbouwScore: ls?.onderbouw?.score ?? null,
+            onderbouwMetrics: ls?.onderbouw?.metrics ? { ...ls.onderbouw.metrics } : {},
+            bovenbouwScore: ls?.bovenbouw?.score ?? null,
+            bovenbouwMetrics: ls?.bovenbouw?.metrics ? { ...ls.bovenbouw.metrics } : {},
         };
-        const vals = {};
-        for (const [key, ind] of Object.entries(d.indicators)) {
-            vals[key] = ind.value;
-        }
-        entry[loc].indicatorValues = vals;
     }
     stored[weekCode] = entry;
     localStorage.setItem('rooster_scores', JSON.stringify(stored));
@@ -1492,7 +1569,7 @@ function computeAllMetrics() {
     console.log('Metrics computed:', {
         docenten: state.docentMetrics.totalTeachers,
         klassen: state.leerlingMetrics.totalKlassen,
-        overall: state.overallScore,
+        docentScore: state.docentScoresByLocation?.alle?.score,
     });
 }
 
@@ -1510,9 +1587,13 @@ function renderDashboard() {
 
     destroyCharts();
 
-    // Overall rapportcijfer + trendgrafiek (altijd zichtbaar)
-    if (state.indicators) {
-        renderOverallScore();
+    // Locatiefilter permanent verbergen (alle 3 locaties worden tegelijk getoond)
+    const locFilter = document.getElementById('location-filter');
+    if (locFilter) locFilter.style.display = 'none';
+
+    // Score-kaarten + trendgrafiek (altijd zichtbaar)
+    if (state.docentScoresByLocation) {
+        renderDocentScoreCards();
         renderTrendChart();
     }
 
@@ -1534,205 +1615,241 @@ function destroyCharts() {
 // ================================================================
 
 function renderDocenten() {
-    const m = state.docentMetrics;
-    if (!m) return;
+    if (!state.docentScoresByLocation) return;
 
-    // Use averaged data when available (after loading all weeks)
-    const useAvg = state.docentMetricsAvg;
-    const sourceTeachers = useAvg ? useAvg.teachers : m.teachers;
-
-    // Apply location filter
-    const teachers = filterByLocation(sourceTeachers, 'teacher');
-
-    // Indicator cards + trend
-    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7']);
-    renderDocentTrendChart();
-
-    // KPIs
-    setText('kpi-doc-total', teachers.length);
-    const avgT = teachers.length > 0
-        ? (teachers.reduce((s, t) => s + parseFloat(t.tussenuren.totaal), 0) / teachers.length).toFixed(1) : 0;
-    setText('kpi-doc-tussenuren', avgT);
-    setText('kpi-doc-pendelaars', teachers.filter(t => t.pendelt).length);
-    const avg8 = teachers.length > 0
-        ? (teachers.reduce((s, t) => s + parseFloat(t.lateUren), 0) / teachers.length).toFixed(1) : 0;
-    setText('kpi-doc-late', avg8);
-
-    // Week count indicator
-    if (useAvg) {
-        setText('kpi-doc-weeks', `${useAvg.weekCount} weken`);
-    }
-
-    // Management summary
-    renderDocentSummary(teachers);
-
-    // Tussenuren table
-    renderDocentTussenuren(teachers);
-
-    // Lokaalconstantie
-    renderDocentLokaal(teachers);
-
-    // Pendelen
-    renderDocentPendel(teachers);
+    renderDocentScoreTrend();
+    renderDocentMetricTable();
+    renderDocentMetricTrend();
 }
 
-function filterByLocation(teachers, type) {
-    if (state.activeFilter === 'alle') return teachers;
+function renderDocentScoreCards() {
+    const container = document.getElementById('doc-score-cards');
+    if (!container) return;
+    container.classList.remove('hidden');
 
-    if (type === 'teacher') {
-        return teachers.filter(t => {
-            // Averaged teachers have locations stored directly
-            if (t.locations instanceof Set) {
-                return [...t.locations].some(loc =>
-                    state.locationToBranch[loc] === state.activeFilter
-                );
-            }
-            // Single-week teachers: check appointments
-            const appts = state.teacherAppointments[t.code] || [];
-            return appts.some(a =>
-                a.locations.some(loc =>
-                    state.locationToBranch[loc] === state.activeFilter
-                )
-            );
-        });
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const useAvg = entries.length >= 2;
+
+    let html = '';
+    for (const loc of ['alle', 'Athena', 'Socrates']) {
+        const label = loc === 'alle' ? 'SGL' : loc;
+        let score;
+        if (useAvg) {
+            const vals = entries.map(e => e[loc]?.docentScore).filter(v => v != null);
+            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+        } else {
+            score = state.docentScoresByLocation[loc]?.score ?? null;
+        }
+        const displayScore = score != null ? (score >= 0 ? '+' + score : score) : '-';
+        const c = locColor(loc);
+        html += `<div class="doc-score-card">
+            <div class="doc-score-label">${label}</div>
+            <div class="doc-score-number" style="color:${c.text}">${displayScore}</div>
+            <div class="doc-score-sub">${useAvg ? `gem. ${entries.length} weken` : 'huidige week'}</div>
+        </div>`;
     }
-    return teachers;
+    container.innerHTML = html;
 }
 
-function renderDocentSummary(teachers) {
-    const el = document.getElementById('doc-summary');
-    if (teachers.length === 0) {
-        el.innerHTML = '<h3>Samenvatting</h3><p>Geen data beschikbaar.</p>';
+function renderDocentScoreTrend() {
+    const section = document.getElementById('doc-score-trend-section');
+    if (!section) return;
+
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+
+    if (entries.length < 2) {
+        section.classList.add('hidden');
         return;
     }
+    section.classList.remove('hidden');
 
-    const worstTussenuren = [...teachers].sort((a, b) => parseFloat(b.tussenuren.totaal) - parseFloat(a.tussenuren.totaal)).slice(0, 3);
-    const rating4Count = teachers.filter(t => t.lokaalRating === 4).length;
-    const pendelCount = teachers.filter(t => t.pendelt).length;
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
+    const currentWeek = state.currentWeekCode;
 
-    const isAvg = !!state.docentMetricsAvg;
-    let html = `<h3>Samenvatting Docenten${isAvg ? ` (gemiddeld over ${state.docentMetricsAvg.weekCount} weken)` : ''}</h3>`;
-    html += `<p>${teachers.length} docenten geanalyseerd. `;
+    const mkLine = (label, loc, color, width) => ({
+        label,
+        data: entries.map(e => e[loc]?.docentScore ?? null),
+        borderColor: color,
+        backgroundColor: color.replace('0.9', '0.1'),
+        borderWidth: width,
+        tension: 0.3,
+        pointRadius: entries.map(e => e.week === currentWeek ? 7 : 2),
+        spanGaps: false,
+    });
 
-    const avgT = (teachers.reduce((s, t) => s + parseFloat(t.tussenuren.totaal), 0) / teachers.length).toFixed(1);
-    if (parseFloat(avgT) <= 1) {
-        html += `Gemiddeld <span class="good">${avgT}</span> tussenuren per week. `;
-    } else if (parseFloat(avgT) <= 3) {
-        html += `Gemiddeld <span class="warn">${avgT}</span> tussenuren per week. `;
-    } else {
-        html += `Gemiddeld <span class="bad">${avgT}</span> tussenuren per week. `;
-    }
+    const datasets = [
+        mkLine('SGL', 'alle', LOC_COLORS.sgl.line, 3),
+        mkLine('Athena', 'Athena', LOC_COLORS.athena.line, 2),
+        mkLine('Socrates', 'Socrates', LOC_COLORS.socrates.line, 2),
+    ];
 
-    if (parseFloat(worstTussenuren[0]?.tussenuren.totaal) > 0) {
-        html += `Meeste tussenuren: ${worstTussenuren.map(t => {
-            const v = parseFloat(t.tussenuren.totaal);
-            return `<strong>${t.code}</strong> (${Number.isInteger(v) ? v : v.toFixed(1)})`;
-        }).join(', ')}. `;
-    }
-
-    if (rating4Count > 0) {
-        html += `<span class="bad">${rating4Count}</span> docent(en) wisselen van lokaal buiten pauzes. `;
-    }
-    if (pendelCount > 0) {
-        html += `${pendelCount} docent(en) pendelen tussen locaties.`;
-    }
-    html += '</p>';
-    el.innerHTML = html;
-}
-
-function renderDocentTussenuren(teachers) {
-    const tbody = document.querySelector('#doc-tussenuren-table tbody');
-    const sorted = [...teachers].sort((a, b) => parseFloat(b.tussenuren.totaal) - parseFloat(a.tussenuren.totaal));
-
-    tbody.innerHTML = sorted.map(t => {
-        const cells = [1, 2, 3, 4, 5].map(d => {
-            const v = parseFloat(t.tussenuren[d]);
-            const cls = v === 0 ? 'good' : v <= 1 ? 'warn' : 'bad';
-            return `<td class="num"><span class="badge ${cls}">${Number.isInteger(v) ? v : v.toFixed(1)}</span></td>`;
-        }).join('');
-        const tot = parseFloat(t.tussenuren.totaal);
-        const totCls = tot === 0 ? 'good' : tot <= 2 ? 'warn' : 'bad';
-        return `<tr>
-            <td>${t.code}</td>
-            ${cells}
-            <td class="num"><strong><span class="badge ${totCls}">${Number.isInteger(tot) ? tot : tot.toFixed(1)}</span></strong></td>
-        </tr>`;
-    }).join('');
-
-}
-
-function renderDocentLokaal(teachers) {
-    const ratingLabels = {
-        1: 'Vast lokaal',
-        2: 'Vast per dag',
-        3: 'Wissel in pauze',
-        4: 'Wissel buiten pauze',
-    };
-
-    const tbody = document.querySelector('#doc-lokaal-table tbody');
-    const sorted = [...teachers].sort((a, b) => b.lokaalRating - a.lokaalRating || b.wisselingenBuitenPauze - a.wisselingenBuitenPauze);
-
-    tbody.innerHTML = sorted.map(t => {
-        const wbp = parseFloat(t.wisselingenBuitenPauze);
-        const wbpDisplay = Number.isInteger(wbp) ? wbp : wbp.toFixed(1);
-        return `<tr>
-            <td>${t.code}</td>
-            <td><span class="badge rating-${t.lokaalRating}">${ratingLabels[t.lokaalRating]}</span></td>
-            <td class="num">${t.lokalen.size}</td>
-            <td class="num">${wbp > 0
-                ? `<span class="badge bad">${wbpDisplay}</span>`
-                : '<span class="badge good">0</span>'}</td>
-        </tr>`;
-    }).join('');
-
-    // Donut chart: rating distribution
-    const counts = [0, 0, 0, 0];
-    for (const t of teachers) counts[t.lokaalRating - 1]++;
-
-    state.charts.docLokaal = new Chart(
-        document.getElementById('chart-doc-lokaal'), {
-            type: 'doughnut',
-            data: {
-                labels: Object.values(ratingLabels),
-                datasets: [{
-                    data: counts,
-                    backgroundColor: [COLORS.green, 'rgba(20, 143, 119, 0.7)', COLORS.orange, COLORS.red],
-                }],
-            },
+    if (state.charts.docScoreTrend) state.charts.docScoreTrend.destroy();
+    state.charts.docScoreTrend = new Chart(
+        document.getElementById('chart-doc-score-trend'), {
+            type: 'line',
+            data: { labels, datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        title: { display: true, text: 'Gewogen score' },
+                    },
+                },
                 plugins: {
-                    legend: { position: 'bottom' },
+                    legend: { display: true, position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                const idx = items[0]?.dataIndex;
+                                if (idx == null) return '';
+                                const e = entries[idx];
+                                return `Week ${parseInt(e.week.slice(4))} (${e.week.slice(0, 4)})`;
+                            },
+                        },
+                    },
                 },
             },
         }
     );
 }
 
-function renderDocentPendel(teachers) {
-    const pendelaars = teachers.filter(t => t.pendelt);
-    const tbody = document.querySelector('#doc-pendel-table tbody');
+function renderDocentMetricTable() {
+    const tbody = document.querySelector('#doc-metric-table tbody');
+    const header = document.getElementById('doc-metric-table-header');
+    if (!tbody) return;
 
-    if (pendelaars.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-light)">Geen pendelaars gevonden</td></tr>';
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const useAvg = entries.length >= 2;
+
+    if (header) {
+        header.textContent = useAvg
+            ? `Metric-overzicht (gemiddeld over ${entries.length} weken)`
+            : 'Metric-overzicht';
+    }
+
+    const metricColor = (key, val) => {
+        const w = DOCENT_METRICS[key].weight;
+        if (w > 0) {
+            // Positief: hoog = goed
+            if (val >= 70) return 'metric-good';
+            if (val >= 40) return 'metric-ok';
+            return 'metric-bad';
+        } else {
+            // Negatief: laag = goed
+            if (val <= 2) return 'metric-good';
+            if (val <= 10) return 'metric-ok';
+            return 'metric-bad';
+        }
+    };
+
+    let rows = '';
+    for (const [key, def] of Object.entries(DOCENT_METRICS)) {
+        const weightDisplay = def.weight > 0 ? `+${def.weight}` : def.weight;
+        const cells = ['alle', 'Athena', 'Socrates'].map(loc => {
+            let val;
+            if (useAvg) {
+                const vals = entries.map(e => e[loc]?.docentMetrics?.[key]).filter(v => v != null);
+                val = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+            } else {
+                val = state.docentScoresByLocation[loc]?.metrics?.[key] ?? null;
+            }
+            if (val == null) return '<td class="num">-</td>';
+            return `<td class="num ${metricColor(key, val)}">${val}%</td>`;
+        }).join('');
+
+        rows += `<tr>
+            <td>${def.label}</td>
+            <td class="num"><strong>${weightDisplay}</strong></td>
+            ${cells}
+        </tr>`;
+    }
+
+    // Totaalrij
+    const totalCells = ['alle', 'Athena', 'Socrates'].map(loc => {
+        let score;
+        if (useAvg) {
+            const vals = entries.map(e => e[loc]?.docentScore).filter(v => v != null);
+            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+        } else {
+            score = state.docentScoresByLocation[loc]?.score ?? null;
+        }
+        if (score == null) return '<td class="num">-</td>';
+        const display = score >= 0 ? '+' + score : score;
+        const c = locColor(loc);
+        return `<td class="num" style="color:${c.text}"><strong>${display}</strong></td>`;
+    }).join('');
+    rows += `<tr class="total-row">
+        <td><strong>Totaalscore</strong></td>
+        <td class="num"></td>
+        ${totalCells}
+    </tr>`;
+
+    tbody.innerHTML = rows;
+}
+
+function renderDocentMetricTrend() {
+    const section = document.getElementById('doc-metric-trend-section');
+    if (!section) return;
+
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+
+    if (entries.length < 2) {
+        section.classList.add('hidden');
         return;
     }
+    section.classList.remove('hidden');
 
-    const rows = [];
-    for (const t of pendelaars) {
-        for (const mv of t.pendelBewegingen) {
-            rows.push(`<tr>
-                <td>${t.code}</td>
-                <td>${DAYS_LABELS[mv.day - 1]}</td>
-                <td>${mv.from} → ${mv.to}</td>
-                <td class="${mv.metReistijd ? 'status-ok' : 'status-problem'}">
-                    ${mv.metReistijd ? 'Ja' : 'Nee'}
-                </td>
-            </tr>`);
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
+
+    const metricDefs = [
+        { key: 'M1', color: 'rgba(39, 174, 96, 0.9)', dash: [] },
+        { key: 'M2', color: 'rgba(20, 143, 119, 0.9)', dash: [] },
+        { key: 'M5', color: 'rgba(41, 128, 185, 0.9)', dash: [] },
+        { key: 'M3', color: 'rgba(243, 156, 18, 0.85)', dash: [5, 3] },
+        { key: 'M4', color: 'rgba(231, 76, 60, 0.85)', dash: [5, 3] },
+        { key: 'M6', color: 'rgba(230, 126, 34, 0.85)', dash: [5, 3] },
+        { key: 'M7', color: 'rgba(155, 89, 182, 0.85)', dash: [5, 3] },
+        { key: 'M8', color: 'rgba(127, 140, 141, 0.85)', dash: [5, 3] },
+        { key: 'M9', color: 'rgba(192, 57, 43, 0.9)', dash: [5, 3] },
+    ];
+
+    const datasets = metricDefs.map(d => ({
+        label: DOCENT_METRICS[d.key].label,
+        data: entries.map(e => e.alle?.docentMetrics?.[d.key] ?? null),
+        borderColor: d.color,
+        borderWidth: 2,
+        borderDash: d.dash,
+        tension: 0.3,
+        pointRadius: 2,
+        spanGaps: false,
+    }));
+
+    if (state.charts.docMetricTrend) state.charts.docMetricTrend.destroy();
+    state.charts.docMetricTrend = new Chart(
+        document.getElementById('chart-doc-metric-trend'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        min: 0,
+                        suggestedMax: 100,
+                        title: { display: true, text: '%' },
+                    },
+                },
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                },
+            },
         }
-    }
-    tbody.innerHTML = rows.join('');
+    );
 }
 
 // ================================================================
@@ -1740,550 +1857,262 @@ function renderDocentPendel(teachers) {
 // ================================================================
 
 function renderLeerlingen() {
-    const m = state.leerlingMetrics;
-    if (!m) return;
+    if (!state.leerlingScoresByLocation) return;
 
     const sub = state.leerlingSubFilter;
     const showOnderbouw = sub === 'alle' || sub === 'onderbouw';
     const showBovenbouw = sub === 'alle' || sub === 'bovenbouw';
 
-    // Toggle section visibility
     const onderbouwEl = document.getElementById('ll-onderbouw-section');
     const bovenbouwEl = document.getElementById('ll-bovenbouw-section');
     if (onderbouwEl) onderbouwEl.classList.toggle('hidden', !showOnderbouw);
     if (bovenbouwEl) bovenbouwEl.classList.toggle('hidden', !showBovenbouw);
 
     if (showOnderbouw) {
-        // Indicator cards onderbouw
-        renderIndicatorCards('ll-indicators', ['O1', 'O2', 'O3', 'O4']);
-
-        const klassen = filterKlassenByLocation(m.klassen);
-
-        // KPIs (onderbouw)
-        setText('kpi-ll-klassen', klassen.length);
-        const avgT = klassen.length > 0
-            ? (klassen.reduce((s, k) => s + k.tussenuren.totaal, 0) / (klassen.length * 5)).toFixed(2) : 0;
-        setText('kpi-ll-tussenuren', avgT);
-
-        const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
-        const randMentor = klassen.reduce((s, k) => s + k.mentorAanRand, 0);
-        setText('kpi-ll-mentor', totalMentor > 0 ? Math.round((randMentor / totalMentor) * 100) + '%' : '-');
-
-        const avg8 = klassen.length > 0
-            ? (klassen.reduce((s, k) => s + k.lateUren8 + k.lateUren9, 0) / klassen.length).toFixed(1) : 0;
-        setText('kpi-ll-late', avg8);
-
-        renderLeerlingenSummary(klassen);
-        renderLeerlingenTussenuren(klassen);
-        renderLeerlingenMentor(klassen);
-        renderLeerlingenKlasgrootte(klassen);
-        renderLeerlingenDaglengte(klassen);
-        renderLeerlingenBlokuren(klassen);
-        renderLeerlingenSpreiding(klassen);
+        renderLeerlingScoreCards('ll-ob-score-cards', 'onderbouw');
+        renderLeerlingScoreTrend('ll-ob-score-trend-section', 'chart-ll-ob-score-trend', 'onderbouw', 'llObScoreTrend');
+        renderLeerlingMetricTable('ll-ob-metric-table', 'll-ob-metric-table-header', 'onderbouw');
+        renderLeerlingMetricTrend('ll-ob-metric-trend-section', 'chart-ll-ob-metric-trend', 'onderbouw', 'llObMetricTrend');
     }
 
     if (showBovenbouw) {
-        renderBovenbouw();
-    }
-}
-
-function filterKlassenByLocation(klassen) {
-    if (state.activeFilter === 'alle') return klassen;
-    return klassen.filter(k => k.branchName === state.activeFilter);
-}
-
-function renderLeerlingenSummary(klassen) {
-    const el = document.getElementById('ll-summary');
-    if (klassen.length === 0) {
-        el.innerHTML = '<h3>Samenvatting</h3><p>Geen data beschikbaar.</p>';
-        return;
-    }
-
-    const worstSwissCheese = [...klassen].sort((a, b) => b.patternScore - a.patternScore).slice(0, 3);
-    const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
-    const randPct = totalMentor > 0
-        ? Math.round((klassen.reduce((s, k) => s + k.mentorAanRand, 0) / totalMentor) * 100)
-        : 0;
-
-    let html = '<h3>Samenvatting Leerlingen</h3>';
-    html += `<p>${klassen.length} klassen geanalyseerd. `;
-
-    if (worstSwissCheese[0]?.patternScore > 0) {
-        html += `Slechtste tussenuren-patroon: ${worstSwissCheese.map(k =>
-            `<strong>${k.name}</strong> (score ${k.patternScore})`
-        ).join(', ')}. `;
-    }
-
-    if (randPct >= 80) {
-        html += `<span class="good">${randPct}%</span> mentoruren aan de rand van de dag. `;
-    } else if (randPct >= 50) {
-        html += `<span class="warn">${randPct}%</span> mentoruren aan de rand van de dag. `;
-    } else if (totalMentor > 0) {
-        html += `<span class="bad">${randPct}%</span> mentoruren aan de rand van de dag. `;
-    }
-
-    html += '</p>';
-    el.innerHTML = html;
-}
-
-function renderLeerlingenTussenuren(klassen) {
-    const tbody = document.querySelector('#ll-tussenuren-table tbody');
-    const sorted = [...klassen].sort((a, b) => b.patternScore - a.patternScore);
-
-    tbody.innerHTML = sorted.map(k => {
-        const cells = [1, 2, 3, 4, 5].map(d => {
-            const v = k.tussenuren[d];
-            const cls = v === 0 ? 'good' : v === 1 ? 'warn' : 'bad';
-            return `<td class="num"><span class="badge ${cls}">${v}</span></td>`;
-        }).join('');
-        const scoreCls = k.patternScore === 0 ? 'good' : k.patternScore <= 3 ? 'warn' : 'bad';
-        return `<tr>
-            <td>${k.name}</td>
-            ${cells}
-            <td class="num">${k.tussenuren.totaal}</td>
-            <td class="num"><span class="badge ${scoreCls}">${k.patternScore}</span></td>
-        </tr>`;
-    }).join('');
-
-    // Bar chart: top 10 worst pattern scores
-    const top10 = sorted.filter(k => k.patternScore > 0).slice(0, 10);
-    state.charts.llTussenuren = new Chart(
-        document.getElementById('chart-ll-tussenuren'), {
-            type: 'bar',
-            data: {
-                labels: top10.map(k => k.name),
-                datasets: [{
-                    label: 'Patroon-score',
-                    data: top10.map(k => k.patternScore),
-                    backgroundColor: COLORS.red,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Swiss cheese score' } },
-                },
-            },
-        }
-    );
-}
-
-function renderLeerlingenMentor(klassen) {
-    const withMentor = klassen.filter(k => k.mentorLessen > 0)
-        .sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
-
-    if (withMentor.length === 0) {
-        document.getElementById('chart-ll-mentor').parentElement
-            .insertAdjacentHTML('afterbegin', '<p style="color:var(--text-light)">Geen mentoruren gevonden</p>');
-        return;
-    }
-
-    const randPcts = withMentor.map(k =>
-        k.mentorLessen > 0 ? Math.round((k.mentorAanRand / k.mentorLessen) * 100) : 0
-    );
-    const middenPcts = randPcts.map(p => 100 - p);
-
-    state.charts.llMentor = new Chart(
-        document.getElementById('chart-ll-mentor'), {
-            type: 'bar',
-            data: {
-                labels: withMentor.map(k => k.name),
-                datasets: [
-                    {
-                        label: 'Aan de rand',
-                        data: randPcts,
-                        backgroundColor: COLORS.green,
-                    },
-                    {
-                        label: 'Midden',
-                        data: middenPcts,
-                        backgroundColor: COLORS.red,
-                    },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    x: { stacked: true },
-                    y: { stacked: true, max: 100, title: { display: true, text: '%' } },
-                },
-            },
-        }
-    );
-}
-
-function renderLeerlingenKlasgrootte(klassen) {
-    const withSize = klassen.filter(k => k.avgSize > 0)
-        .sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
-
-    if (withSize.length === 0) return;
-
-    const bgColors = withSize.map(k => {
-        if (k.avgSize < 20) return 'rgba(41, 128, 185, 0.7)';   // blauw (klein)
-        if (k.avgSize <= 28) return COLORS.green;                 // groen (ideaal)
-        if (k.avgSize <= 32) return COLORS.orange;                // oranje (groot)
-        return COLORS.red;                                         // rood (te groot)
-    });
-
-    state.charts.llKlasgrootte = new Chart(
-        document.getElementById('chart-ll-klasgrootte'), {
-            type: 'bar',
-            data: {
-                labels: withSize.map(k => k.name),
-                datasets: [{
-                    label: 'Gemiddelde klasgrootte',
-                    data: withSize.map(k => k.avgSize),
-                    backgroundColor: bgColors,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Leerlingen' } },
-                },
-            },
-        }
-    );
-}
-
-function renderLeerlingenDaglengte(klassen) {
-    // Heatmap: klas x dag, cel = laatste lesuur
-    const container = document.getElementById('ll-daglengte-heatmap');
-    const sorted = [...klassen].sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
-
-    let html = '<table class="heatmap-table"><thead><tr><th>Klas</th>';
-    for (const d of DAYS_LABELS) html += `<th>${d}</th>`;
-    html += '</tr></thead><tbody>';
-
-    for (const k of sorted) {
-        html += `<tr><td>${k.name}</td>`;
-        for (const d of [1, 2, 3, 4, 5]) {
-            const val = k.laatsteUur[d];
-            let bg = '#f0f3f5';
-            let textColor = '#333';
-            if (val >= 9) { bg = 'rgba(231, 76, 60, 0.7)'; textColor = 'white'; }
-            else if (val >= 8) { bg = 'rgba(230, 126, 34, 0.6)'; textColor = 'white'; }
-            else if (val >= 7) { bg = 'rgba(241, 196, 15, 0.5)'; }
-            else if (val > 0) { bg = 'rgba(39, 174, 96, 0.3)'; }
-            html += `<td style="background:${bg};color:${textColor}">${val || '-'}</td>`;
-        }
-        html += '</tr>';
-    }
-    html += '</tbody></table>';
-    container.innerHTML = html;
-
-    // 8e/9e uren table
-    const tbody = document.querySelector('#ll-late-table tbody');
-    const sortedLate = [...klassen]
-        .filter(k => k.lateUren8 > 0 || k.lateUren9 > 0)
-        .sort((a, b) => (b.lateUren8 + b.lateUren9) - (a.lateUren8 + a.lateUren9));
-
-    tbody.innerHTML = sortedLate.map(k => `<tr>
-        <td>${k.name}</td>
-        <td class="num">${k.lateUren8 > 0 ? `<span class="badge warn">${k.lateUren8}</span>` : '0'}</td>
-        <td class="num">${k.lateUren9 > 0 ? `<span class="badge bad">${k.lateUren9}</span>` : '0'}</td>
-    </tr>`).join('');
-}
-
-function renderLeerlingenBlokuren(klassen) {
-    const tbody = document.querySelector('#ll-blokuren-table tbody');
-
-    // Collect all blokuren entries
-    const rows = [];
-    for (const k of klassen) {
-        for (const b of k.blokuren) {
-            rows.push({ klas: k.name, ...b });
+        const hasBV = state.leerlingMetrics?.bovenbouw != null;
+        const cardsEl = document.getElementById('ll-bv-score-cards');
+        if (!hasBV) {
+            if (cardsEl) cardsEl.innerHTML =
+                '<div class="doc-score-card" style="grid-column:1/-1;text-align:center">' +
+                '<div class="doc-score-sub">Upload een CumLaude Excel (bovenbouw) voor per-leerling analyse</div></div>';
+            // Hide trend/table/metric sections when no bovenbouw data
+            document.getElementById('ll-bv-score-trend-section')?.classList.add('hidden');
+            document.getElementById('ll-bv-metric-trend-section')?.classList.add('hidden');
+            const bvTableSection = document.getElementById('ll-bv-metric-table')?.closest('.chart-section');
+            if (bvTableSection) bvTableSection.style.display = 'none';
+        } else {
+            const bvTableSection = document.getElementById('ll-bv-metric-table')?.closest('.chart-section');
+            if (bvTableSection) bvTableSection.style.display = '';
+            renderLeerlingScoreCards('ll-bv-score-cards', 'bovenbouw');
+            renderLeerlingScoreTrend('ll-bv-score-trend-section', 'chart-ll-bv-score-trend', 'bovenbouw', 'llBvScoreTrend');
+            renderLeerlingMetricTable('ll-bv-metric-table', 'll-bv-metric-table-header', 'bovenbouw');
+            renderLeerlingMetricTrend('ll-bv-metric-trend-section', 'chart-ll-bv-metric-trend', 'bovenbouw', 'llBvMetricTrend');
         }
     }
-
-    // Sort: problematic ones first (isOk = false), then alphabetically
-    rows.sort((a, b) => {
-        if (a.isOk !== b.isOk) return a.isOk ? 1 : -1;
-        return a.klas.localeCompare(b.klas, 'nl', { numeric: true }) || a.vak.localeCompare(b.vak);
-    });
-
-    if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">Geen blokuren gevonden</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = rows.slice(0, 80).map(r => {
-        const statusCls = r.isOk ? 'good' : 'warn';
-        const statusText = r.isOk ? 'Normaal' : 'Onwenselijk';
-        return `<tr>
-            <td>${r.klas}</td>
-            <td>${r.vak}</td>
-            <td>${DAYS_LABELS[r.day - 1]}</td>
-            <td class="num">${r.slots}</td>
-            <td class="num"><span class="badge ${statusCls}">${statusText}</span></td>
-        </tr>`;
-    }).join('');
-
-    // Chart: count blokuren per subject, split OK vs problematic
-    const vakCounts = {};
-    for (const r of rows) {
-        if (!vakCounts[r.vak]) vakCounts[r.vak] = { ok: 0, problematic: 0 };
-        if (r.isOk) vakCounts[r.vak].ok++;
-        else vakCounts[r.vak].problematic++;
-    }
-
-    const sortedVakken = Object.entries(vakCounts)
-        .sort((a, b) => (b[1].ok + b[1].problematic) - (a[1].ok + a[1].problematic))
-        .slice(0, 15);
-
-    state.charts.llBlokuren = new Chart(
-        document.getElementById('chart-ll-blokuren'), {
-            type: 'bar',
-            data: {
-                labels: sortedVakken.map(([vak]) => vak),
-                datasets: [
-                    {
-                        label: 'Normaal (LO/BV etc)',
-                        data: sortedVakken.map(([, c]) => c.ok),
-                        backgroundColor: COLORS.green,
-                    },
-                    {
-                        label: 'Onwenselijk',
-                        data: sortedVakken.map(([, c]) => c.problematic),
-                        backgroundColor: COLORS.orange,
-                    },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    x: { stacked: true },
-                    y: { stacked: true, beginAtZero: true, title: { display: true, text: 'Aantal blokuren' } },
-                },
-            },
-        }
-    );
 }
 
-function renderLeerlingenSpreiding(klassen) {
-    const tbody = document.querySelector('#ll-spreiding-table tbody');
-
-    // Collect all bad spreiding entries (score < 0.7)
-    const rows = [];
-    for (const k of klassen) {
-        for (const vs of k.vakSpreiding) {
-            if (vs.score < 0.7) { // Less than 70% of ideal spread
-                rows.push({ klas: k.name, ...vs });
-            }
-        }
-    }
-    rows.sort((a, b) => a.score - b.score);
-
-    if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">Geen problemen met lesspreiding gevonden</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = rows.slice(0, 50).map(r => {
-        const scoreCls = r.score < 0.4 ? 'bad' : 'warn';
-        const pct = Math.round(r.score * 100);
-        return `<tr>
-            <td>${r.klas}</td>
-            <td>${r.vak}</td>
-            <td class="num">${r.lessen}</td>
-            <td class="num">${r.dagen}</td>
-            <td class="num"><span class="badge ${scoreCls}">${pct}%</span></td>
-        </tr>`;
-    }).join('');
-}
-
-// ================================================================
-// RENDERING — BOVENBOUW
-// ================================================================
-
-function renderBovenbouw() {
-    const m = state.leerlingMetrics;
-    const bv = m?.bovenbouw;
-    const summaryEl = document.getElementById('bv-summary');
-    const kpiEl = document.getElementById('bv-kpi-section');
-    const dataEl = document.getElementById('bv-data-section');
-
-    if (!bv) {
-        // No CumLaude data uploaded
-        if (summaryEl) summaryEl.innerHTML =
-            '<h3>Bovenbouw (4-6)</h3>' +
-            '<p>Upload een CumLaude Excel-bestand (met alle bovenbouw lesgroepen) om per-leerling roosteranalyse te zien. ' +
-            'Zonder CumLaude data zijn bovenbouw-analyses niet beschikbaar omdat leerlingen individuele vakkenpakketten hebben.</p>';
-        if (kpiEl) kpiEl.classList.add('hidden');
-        if (dataEl) dataEl.classList.add('hidden');
-        return;
-    }
-
-    if (kpiEl) kpiEl.classList.remove('hidden');
-    if (dataEl) dataEl.classList.remove('hidden');
-
-    // Indicator cards bovenbouw
-    renderIndicatorCards('bv-indicators', ['B1', 'B2', 'B3']);
-
-    const klassen = filterKlassenByLocation(bv.klassen);
-
-    // KPIs
-    setText('kpi-bv-leerlingen', bv.totalStudents);
-    setText('kpi-bv-klassen', klassen.length);
-    setText('kpi-bv-tussenuren', bv.avgTussenuren);
-    setText('kpi-bv-late', bv.avgLateUren);
-
-    // Summary
-    renderBovenbouwSummary(klassen, bv);
-
-    // Tussenuren table
-    renderBovenbouwTussenuren(klassen);
-
-    // Daglengte heatmap
-    renderBovenbouwDaglengte(klassen);
-
-    // Blokuren
-    renderBovenbouwBlokuren(bv.vakgroepBlokuren);
-}
-
-function renderBovenbouwSummary(klassen, bv) {
-    const el = document.getElementById('bv-summary');
-    if (!el) return;
-
-    let html = '<h3>Samenvatting Bovenbouw (4-6)</h3>';
-    html += `<p>${bv.totalStudents} leerlingen in ${klassen.length} klassen geanalyseerd (per-leerling via CumLaude). `;
-
-    if (bv.avgTussenuren <= 1) {
-        html += `Gemiddeld <span class="good">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
-    } else if (bv.avgTussenuren <= 3) {
-        html += `Gemiddeld <span class="warn">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
-    } else {
-        html += `Gemiddeld <span class="bad">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
-    }
-
-    // Worst klassen
-    const worst = [...klassen].sort((a, b) => b.avgTussenuren - a.avgTussenuren).slice(0, 3)
-        .filter(k => k.avgTussenuren > 0);
-    if (worst.length > 0) {
-        html += `Meeste tussenuren: ${worst.map(k =>
-            `<strong>${k.name}</strong> (gem. ${k.avgTussenuren})`
-        ).join(', ')}. `;
-    }
-
-    const problemBlokuren = bv.vakgroepBlokuren.filter(b => !b.isOk).length;
-    if (problemBlokuren > 0) {
-        html += `<span class="warn">${problemBlokuren}</span> onwenselijke blokuren in vakgroepen. `;
-    }
-
-    html += '</p>';
-    el.innerHTML = html;
-}
-
-function renderBovenbouwTussenuren(klassen) {
-    const tbody = document.querySelector('#bv-tussenuren-table tbody');
-    if (!tbody) return;
-
-    const sorted = [...klassen].sort((a, b) => b.avgTussenuren - a.avgTussenuren);
-
-    tbody.innerHTML = sorted.map(k => {
-        const cells = [1, 2, 3, 4, 5].map(d => {
-            const v = k.avgTussenPerDag[d];
-            const cls = v === 0 ? 'good' : v <= 0.3 ? 'warn' : 'bad';
-            return `<td class="num"><span class="badge ${cls}">${v}</span></td>`;
-        }).join('');
-        const avgCls = k.avgTussenuren === 0 ? 'good' : k.avgTussenuren <= 2 ? 'warn' : 'bad';
-        return `<tr>
-            <td>${k.name}</td>
-            <td class="num">${k.studentCount}</td>
-            ${cells}
-            <td class="num"><span class="badge ${avgCls}">${k.avgTussenuren}</span></td>
-            <td class="num">${k.maxTussenuren}</td>
-        </tr>`;
-    }).join('');
-
-    // Bar chart: avg tussenuren per klas
-    const chartData = sorted.filter(k => k.avgTussenuren > 0).slice(0, 15);
-    if (state.charts.bvTussenuren) state.charts.bvTussenuren.destroy();
-    state.charts.bvTussenuren = new Chart(
-        document.getElementById('chart-bv-tussenuren'), {
-            type: 'bar',
-            data: {
-                labels: chartData.map(k => k.name),
-                datasets: [{
-                    label: 'Gem. tussenuren',
-                    data: chartData.map(k => k.avgTussenuren),
-                    backgroundColor: COLORS.red,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Gem. tussenuren per leerling' } },
-                },
-            },
-        }
-    );
-}
-
-function renderBovenbouwDaglengte(klassen) {
-    const container = document.getElementById('bv-daglengte-heatmap');
+function renderLeerlingScoreCards(containerId, bouw) {
+    const container = document.getElementById(containerId);
     if (!container) return;
 
-    const sorted = [...klassen].sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const useAvg = entries.length >= 2;
+    const scoreKey = bouw === 'onderbouw' ? 'onderbouwScore' : 'bovenbouwScore';
 
-    let html = '<table class="heatmap-table"><thead><tr><th>Klas</th>';
-    for (const d of DAYS_LABELS) html += `<th>${d}</th>`;
-    html += '</tr></thead><tbody>';
-
-    for (const k of sorted) {
-        html += `<tr><td>${k.name}</td>`;
-        for (const d of [1, 2, 3, 4, 5]) {
-            const val = k.avgLaatsteUur[d];
-            let bg = '#f0f3f5';
-            let textColor = '#333';
-            if (val >= 9) { bg = 'rgba(231, 76, 60, 0.7)'; textColor = 'white'; }
-            else if (val >= 8) { bg = 'rgba(230, 126, 34, 0.6)'; textColor = 'white'; }
-            else if (val >= 7) { bg = 'rgba(241, 196, 15, 0.5)'; }
-            else if (val > 0) { bg = 'rgba(39, 174, 96, 0.3)'; }
-            html += `<td style="background:${bg};color:${textColor}">${val || '-'}</td>`;
+    let html = '';
+    for (const loc of ['alle', 'Athena', 'Socrates']) {
+        const label = loc === 'alle' ? 'SGL' : loc;
+        let score;
+        if (useAvg) {
+            const vals = entries.map(e => e[loc]?.[scoreKey]).filter(v => v != null);
+            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+        } else {
+            score = state.leerlingScoresByLocation?.[loc]?.[bouw]?.score ?? null;
         }
-        html += '</tr>';
+        const displayScore = score != null ? (score >= 0 ? '+' + score : score) : '-';
+        const c = locColor(loc, bouw);
+        html += `<div class="doc-score-card">
+            <div class="doc-score-label">${label}</div>
+            <div class="doc-score-number" style="color:${c.text}">${displayScore}</div>
+            <div class="doc-score-sub">${useAvg ? `gem. ${entries.length} weken` : 'huidige week'}</div>
+        </div>`;
     }
-    html += '</tbody></table>';
     container.innerHTML = html;
 }
 
-function renderBovenbouwBlokuren(blokuren) {
-    const tbody = document.querySelector('#bv-blokuren-table tbody');
-    if (!tbody) return;
+function renderLeerlingScoreTrend(sectionId, canvasId, bouw, chartKey) {
+    const section = document.getElementById(sectionId);
+    if (!section) return;
 
-    // Sort: problematic first
-    const sorted = [...blokuren].sort((a, b) => {
-        if (a.isOk !== b.isOk) return a.isOk ? 1 : -1;
-        return a.groep.localeCompare(b.groep, 'nl', { numeric: true });
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const scoreKey = bouw === 'onderbouw' ? 'onderbouwScore' : 'bovenbouwScore';
+
+    if (entries.length < 2) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
+    const currentWeek = state.currentWeekCode;
+
+    const mkLine = (label, loc, color, width) => ({
+        label,
+        data: entries.map(e => e[loc]?.[scoreKey] ?? null),
+        borderColor: color,
+        backgroundColor: color.replace('0.9', '0.1'),
+        borderWidth: width,
+        tension: 0.3,
+        pointRadius: entries.map(e => e.week === currentWeek ? 7 : 2),
+        spanGaps: false,
     });
 
-    if (sorted.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">Geen blokuren gevonden</td></tr>';
-        return;
+    if (state.charts[chartKey]) state.charts[chartKey].destroy();
+    state.charts[chartKey] = new Chart(
+        document.getElementById(canvasId), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    mkLine('SGL', 'alle', locColor('alle', bouw).line, 3),
+                    mkLine('Athena', 'Athena', locColor('Athena', bouw).line, 2),
+                    mkLine('Socrates', 'Socrates', locColor('Socrates', bouw).line, 2),
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { title: { display: true, text: 'Gewogen score' } } },
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                const idx = items[0]?.dataIndex;
+                                if (idx == null) return '';
+                                const e = entries[idx];
+                                return `Week ${parseInt(e.week.slice(4))} (${e.week.slice(0, 4)})`;
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    );
+}
+
+function renderLeerlingMetricTable(tableId, headerId, bouw) {
+    const tbody = document.querySelector(`#${tableId} tbody`);
+    const header = document.getElementById(headerId);
+    if (!tbody) return;
+
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const useAvg = entries.length >= 2;
+    const metricsKey = bouw === 'onderbouw' ? 'onderbouwMetrics' : 'bovenbouwMetrics';
+
+    const bouwLabel = bouw === 'onderbouw' ? 'Onderbouw' : 'Bovenbouw';
+    if (header) {
+        header.textContent = useAvg
+            ? `Metric-overzicht ${bouwLabel} (gemiddeld over ${entries.length} weken)`
+            : `Metric-overzicht ${bouwLabel}`;
     }
 
-    tbody.innerHTML = sorted.slice(0, 80).map(r => {
-        const statusCls = r.isOk ? 'good' : 'warn';
-        const statusText = r.isOk ? 'Normaal' : 'Onwenselijk';
-        return `<tr>
-            <td>${r.groep}</td>
-            <td>${r.vak}</td>
-            <td>${DAYS_LABELS[r.day - 1]}</td>
-            <td class="num">${r.slots}</td>
-            <td class="num"><span class="badge ${statusCls}">${statusText}</span></td>
+    const metricColor = (key, val) => {
+        const w = LEERLING_METRICS[key].weight;
+        if (w > 0) {
+            if (val >= 70) return 'metric-good';
+            if (val >= 40) return 'metric-ok';
+            return 'metric-bad';
+        } else {
+            if (val <= 2) return 'metric-good';
+            if (val <= 10) return 'metric-ok';
+            return 'metric-bad';
+        }
+    };
+
+    let rows = '';
+    for (const [key, def] of Object.entries(LEERLING_METRICS)) {
+        const weightDisplay = def.weight > 0 ? `+${def.weight}` : def.weight;
+        const cells = ['alle', 'Athena', 'Socrates'].map(loc => {
+            let val;
+            if (useAvg) {
+                const vals = entries.map(e => e[loc]?.[metricsKey]?.[key]).filter(v => v != null);
+                val = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+            } else {
+                val = state.leerlingScoresByLocation?.[loc]?.[bouw]?.metrics?.[key] ?? null;
+            }
+            if (val == null) return '<td class="num">-</td>';
+            return `<td class="num ${metricColor(key, val)}">${val}%</td>`;
+        }).join('');
+
+        rows += `<tr>
+            <td>${def.label}</td>
+            <td class="num"><strong>${weightDisplay}</strong></td>
+            ${cells}
         </tr>`;
+    }
+
+    // Totaalrij
+    const scoreKey = bouw === 'onderbouw' ? 'onderbouwScore' : 'bovenbouwScore';
+    const totalCells = ['alle', 'Athena', 'Socrates'].map(loc => {
+        let score;
+        if (useAvg) {
+            const vals = entries.map(e => e[loc]?.[scoreKey]).filter(v => v != null);
+            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+        } else {
+            score = state.leerlingScoresByLocation?.[loc]?.[bouw]?.score ?? null;
+        }
+        if (score == null) return '<td class="num">-</td>';
+        const display = score >= 0 ? '+' + score : score;
+        const c = locColor(loc, bouw);
+        return `<td class="num" style="color:${c.text}"><strong>${display}</strong></td>`;
     }).join('');
+    rows += `<tr class="total-row">
+        <td><strong>Totaalscore</strong></td>
+        <td class="num"></td>
+        ${totalCells}
+    </tr>`;
+
+    tbody.innerHTML = rows;
+}
+
+function renderLeerlingMetricTrend(sectionId, canvasId, bouw, chartKey) {
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const metricsKey = bouw === 'onderbouw' ? 'onderbouwMetrics' : 'bovenbouwMetrics';
+
+    if (entries.length < 2) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
+
+    const metricDefs = [
+        { key: 'L1', color: 'rgba(39, 174, 96, 0.9)', dash: [] },
+        { key: 'L4', color: 'rgba(20, 143, 119, 0.9)', dash: [] },
+        { key: 'L2', color: 'rgba(231, 76, 60, 0.85)', dash: [5, 3] },
+        { key: 'L3', color: 'rgba(192, 57, 43, 0.9)', dash: [5, 3] },
+        { key: 'L5', color: 'rgba(155, 89, 182, 0.85)', dash: [5, 3] },
+        { key: 'L6', color: 'rgba(243, 156, 18, 0.85)', dash: [5, 3] },
+        { key: 'L7', color: 'rgba(230, 126, 34, 0.85)', dash: [5, 3] },
+        { key: 'L8', color: 'rgba(127, 140, 141, 0.85)', dash: [5, 3] },
+    ];
+
+    const datasets = metricDefs.map(d => ({
+        label: LEERLING_METRICS[d.key].label,
+        data: entries.map(e => e.alle?.[metricsKey]?.[d.key] ?? null),
+        borderColor: d.color,
+        borderWidth: 2,
+        borderDash: d.dash,
+        tension: 0.3,
+        pointRadius: 2,
+        spanGaps: false,
+    }));
+
+    if (state.charts[chartKey]) state.charts[chartKey].destroy();
+    state.charts[chartKey] = new Chart(
+        document.getElementById(canvasId), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { min: 0, suggestedMax: 100, title: { display: true, text: '%' } },
+                },
+                plugins: { legend: { display: true, position: 'top' } },
+            },
+        }
+    );
 }
 
 // ================================================================
@@ -2293,9 +2122,6 @@ function renderBovenbouwBlokuren(blokuren) {
 function renderAchteraf() {
     const m = state.achterafMetrics;
     if (!m) return;
-
-    // Indicator card
-    renderIndicatorCards('ach-indicators', ['S1']);
 
     // KPIs
     setText('kpi-ach-uitval', m.uitvalPct + '%');
@@ -2422,92 +2248,6 @@ function renderAchterafDocent(m) {
     }).join('');
 }
 
-// ================================================================
-// RENDERING — INDICATORS & RAPPORTCIJFER
-// ================================================================
-
-function renderOverallScore() {
-    const section = document.getElementById('overall-score-section');
-    if (!section || !state.indicatorsByLocation) return;
-    section.classList.remove('hidden');
-
-    // Render score per locatie
-    for (const [loc, elId] of [['alle', 'score-sgl'], ['Athena', 'score-athena'], ['Socrates', 'score-socrates']]) {
-        const d = state.indicatorsByLocation[loc];
-        if (!d) continue;
-        const el = document.getElementById(elId);
-        if (!el) continue;
-        const cls = d.overall >= 7 ? 'score-green' : d.overall >= 4 ? 'score-orange' : 'score-red';
-        el.className = 'score-number ' + cls;
-        el.textContent = d.overall.toFixed(1);
-
-        // Subtotalen docenten/leerlingen
-        const docEl = document.getElementById(elId + '-doc');
-        const llEl = document.getElementById(elId + '-ll');
-        if (docEl) docEl.textContent = d.subtotals.docenten?.toFixed(1) ?? '-';
-        if (llEl) {
-            const llScore = d.subtotals.bovenbouw
-                ? +((d.subtotals.onderbouw + d.subtotals.bovenbouw) / 2).toFixed(1)
-                : d.subtotals.onderbouw ?? null;
-            llEl.textContent = llScore?.toFixed(1) ?? '-';
-        }
-    }
-
-    // Subtitle met indicator telling
-    const inds = Object.values(state.indicators);
-    const g = inds.filter(i => i.status === 'green').length;
-    const o = inds.filter(i => i.status === 'orange').length;
-    const r = inds.filter(i => i.status === 'red').length;
-    const subtitleEl = document.getElementById('overall-score-subtitle');
-    if (subtitleEl) subtitleEl.innerHTML = `${inds.length} indicatoren &mdash; <span class="dot-green"></span>${g} groen &middot; <span class="dot-orange"></span>${o} oranje &middot; <span class="dot-red"></span>${r} rood`;
-}
-
-function renderIndicatorCards(containerId, indicatorKeys) {
-    const container = document.getElementById(containerId);
-    if (!container || !state.indicatorsByLocation) return;
-
-    // Compute averaged indicator values from localStorage (all non-vacation weeks)
-    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = filterVacationWeeks(Object.values(stored));
-    const locKey = state.activeFilter === 'alle' ? 'alle' : state.activeFilter;
-
-    const useAvg = entries.length >= 2;
-    let html = '';
-
-    if (useAvg) {
-        html += `<div class="indicator-header">Samenvatting KPI's (gemiddeld over ${entries.length} weken)</div>`;
-    }
-
-    for (const key of indicatorKeys) {
-        let value, status;
-        if (useAvg) {
-            // Average value across all non-vacation weeks
-            const vals = entries.map(e => e[locKey]?.indicatorValues?.[key]).filter(v => v != null);
-            if (vals.length === 0) continue;
-            value = +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1);
-            const ind = computeIndicator(key, value);
-            status = ind.status;
-        } else {
-            // Fallback: current week
-            const locData = state.indicatorsByLocation[state.activeFilter] || state.indicatorsByLocation.alle;
-            const ind = locData.indicators[key];
-            if (!ind) continue;
-            value = ind.value;
-            status = ind.status;
-        }
-
-        const def = KEY_INDICATORS[key];
-        const displayVal = def.unit === '%' ? value + '%' : value;
-
-        html += `<div class="indicator-card ${status}">
-            <div class="indicator-dot ${status}"></div>
-            <div class="indicator-value">${displayVal}</div>
-            <div class="indicator-label">${def.label}</div>
-        </div>`;
-    }
-    container.innerHTML = html;
-}
-
 function renderTrendChart() {
     const section = document.getElementById('trend-section');
     if (!section) return;
@@ -2524,7 +2264,6 @@ function renderTrendChart() {
     const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
     const currentWeek = state.currentWeekCode;
 
-    // Per-locatie lijnen met uitsplitsing docenten/leerlingen
     const mkLine = (label, getter, color, width, dashed) => ({
         label,
         data: entries.map(getter),
@@ -2538,11 +2277,9 @@ function renderTrendChart() {
     });
 
     const datasets = [
-        mkLine('SGL Overall', e => e.alle?.overall ?? e.overall ?? null, 'rgba(26, 82, 118, 0.95)', 3, false),
-        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(155, 89, 182, 0.7)', 1.5, true),
-        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(230, 126, 34, 0.7)', 1.5, [2, 2]),
-        mkLine('Athena', e => e.Athena?.overall ?? null, 'rgba(41, 128, 185, 0.9)', 2, false),
-        mkLine('Socrates', e => e.Socrates?.overall ?? null, 'rgba(39, 174, 96, 0.9)', 2, false),
+        mkLine('SGL Docenten', e => e.alle?.docentScore ?? null, LOC_COLORS.sgl.line, 3, false),
+        mkLine('Athena Docenten', e => e.Athena?.docentScore ?? null, LOC_COLORS.athena.line, 2, false),
+        mkLine('Socrates Docenten', e => e.Socrates?.docentScore ?? null, LOC_COLORS.socrates.line, 2, false),
     ];
 
     if (state.charts.trend) state.charts.trend.destroy();
@@ -2555,10 +2292,7 @@ function renderTrendChart() {
                 maintainAspectRatio: false,
                 scales: {
                     y: {
-                        min: 0,
-                        suggestedMax: 10,
-                        title: { display: true, text: 'Rapportcijfer' },
-                        ticks: { stepSize: 1 },
+                        title: { display: true, text: 'Gewogen score' },
                     },
                 },
                 plugins: {
@@ -2581,65 +2315,6 @@ function renderTrendChart() {
 
 // ================================================================
 // HELPER FUNCTIONS
-function renderDocentTrendChart() {
-    const section = document.getElementById('doc-trend-section');
-    if (!section) return;
-
-    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = filterVacationWeeks(Object.values(stored));
-
-    if (entries.length < 2) {
-        section.classList.add('hidden');
-        return;
-    }
-    section.classList.remove('hidden');
-
-    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
-    const locKey = state.activeFilter === 'alle' ? 'alle' : state.activeFilter;
-
-    const kpiDefs = [
-        { key: 'D1', label: 'Lokaalwissel buiten pauze (%)', color: 'rgba(231, 76, 60, 0.85)' },
-        { key: 'D2', label: 'Tussenuren >2/week (%)', color: 'rgba(230, 126, 34, 0.85)' },
-        { key: 'D3', label: 'Lokaalwissel in pauze (%)', color: 'rgba(243, 156, 18, 0.85)' },
-        { key: 'D4', label: 'Pendel zonder reistijd (%)', color: 'rgba(155, 89, 182, 0.85)' },
-        { key: 'D5', label: 'Late uren >1/week (%)', color: 'rgba(41, 128, 185, 0.85)' },
-        { key: 'D6', label: 'Vast lokaal (%)', color: 'rgba(39, 174, 96, 0.85)' },
-        { key: 'D7', label: 'Pendelmomenten/week', color: 'rgba(127, 140, 141, 0.85)' },
-    ];
-
-    const datasets = kpiDefs.map(def => ({
-        label: def.label,
-        data: entries.map(e => e[locKey]?.indicatorValues?.[def.key] ?? null),
-        borderColor: def.color,
-        backgroundColor: def.color.replace('0.8', '0.1'),
-        borderWidth: 2,
-        tension: 0.3,
-        pointRadius: 2,
-        spanGaps: false,
-    }));
-
-    if (state.charts.docTrend) state.charts.docTrend.destroy();
-    state.charts.docTrend = new Chart(
-        document.getElementById('chart-doc-trend'), {
-            type: 'line',
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        min: 0,
-                        title: { display: true, text: '%' },
-                    },
-                },
-                plugins: {
-                    legend: { display: true, position: 'top' },
-                },
-            },
-        }
-    );
-}
-
 // ================================================================
 
 /**
@@ -2941,13 +2616,7 @@ async function init() {
     initTokenHandlers();
     initCumLaudeUpload();
 
-    // Init sortable tables
-    const tableIds = [
-        'doc-tussenuren-table', 'doc-lokaal-table', 'doc-pendel-table',
-        'll-tussenuren-table', 'll-late-table', 'll-blokuren-table', 'll-spreiding-table',
-        'bv-tussenuren-table', 'bv-blokuren-table',
-    ];
-    for (const id of tableIds) initSortableTable(id);
+    // Init sortable tables (metric tables are static, no sorting needed)
 
     // Check for stored token
     if (!API_TOKEN) {

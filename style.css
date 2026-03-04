@@ -2,10 +2,10 @@
 /* Gebaseerd op Laptopkarren dashboard stijl */
 
 :root {
-    --primary: #1a5276;
-    --primary-light: #2980b9;
-    --accent: #e67e22;
-    --accent-red: #e74c3c;
+    --primary: #41509E;
+    --primary-light: #5E6CB0;
+    --accent: #FCC300;
+    --accent-red: #B70E0C;
     --success: #27ae60;
     --bg: #f4f6f8;
     --card-bg: #ffffff;
@@ -14,6 +14,10 @@
     --border: #dce1e6;
     --radius: 10px;
     --shadow: 0 2px 8px rgba(0,0,0,0.08);
+    /* SGL locatie kleuren */
+    --sgl-blue: #41509E;
+    --sgl-yellow: #FCC300;
+    --sgl-red: #B70E0C;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -464,81 +468,6 @@ footer {
     color: white;
 }
 
-/* ===== Overall Rapportcijfer Card ===== */
-.score-card {
-    background: var(--card-bg);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 1.5rem 2rem;
-    text-align: center;
-    margin-bottom: 1.5rem;
-}
-.score-label {
-    font-size: 0.8rem;
-    color: var(--text-light);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-}
-.score-value {
-    font-size: 3.5rem;
-    font-weight: 800;
-    line-height: 1.1;
-    margin-bottom: 0.35rem;
-}
-.score-subtitle {
-    font-size: 0.85rem;
-    color: var(--text-light);
-}
-/* Score grid: 3-column layout (SGL / Athena / Socrates) */
-.score-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 1.5rem;
-    margin: 0.75rem 0;
-}
-.score-col {
-    text-align: center;
-}
-.score-col-label {
-    font-size: 0.75rem;
-    color: var(--text-light);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-weight: 600;
-    margin-bottom: 0.1rem;
-}
-.score-number {
-    font-size: 3rem;
-    font-weight: 800;
-    line-height: 1.1;
-    margin-bottom: 0.25rem;
-}
-.score-sub {
-    font-size: 0.8rem;
-    color: var(--text-light);
-    line-height: 1.5;
-}
-.score-sub-label {
-    font-weight: 600;
-}
-
-.score-green { color: var(--success); }
-.score-orange { color: var(--accent); }
-.score-red { color: var(--accent-red); }
-
-/* Status dot inline (for subtitle) */
-.dot-green, .dot-orange, .dot-red {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    margin-right: 2px;
-    vertical-align: middle;
-}
-.dot-green { background: var(--success); }
-.dot-orange { background: var(--accent); }
-.dot-red { background: var(--accent-red); }
 
 /* ===== Indicator Cards (stoplicht) ===== */
 .indicator-header {
@@ -588,6 +517,58 @@ footer {
     color: var(--text-light);
     margin-top: 0.15rem;
     line-height: 1.25;
+}
+
+/* ===== Docenten Score Cards ===== */
+.doc-score-cards-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.doc-score-card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.5rem 1rem;
+    text-align: center;
+}
+.doc-score-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+.doc-score-number {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--primary);
+    line-height: 1.2;
+}
+.doc-score-sub {
+    font-size: 0.75rem;
+    color: var(--text-light);
+    margin-top: 0.3rem;
+}
+
+/* ===== Docenten Metric Table Coloring ===== */
+.metric-good { background: rgba(39, 174, 96, 0.12); }
+.metric-ok { background: rgba(243, 156, 18, 0.12); }
+.metric-bad { background: rgba(231, 76, 60, 0.12); }
+.total-row {
+    border-top: 2px solid var(--border);
+    font-weight: 600;
+}
+
+/* ===== Section Divider ===== */
+.section-divider {
+    border-bottom: 2px solid var(--primary);
+    padding-bottom: 0.5rem;
+    margin: 1.5rem 0 1rem;
+    color: var(--primary);
+    font-size: 1.2rem;
 }
 
 /* ===== Leerlingen Sub-filter ===== */
