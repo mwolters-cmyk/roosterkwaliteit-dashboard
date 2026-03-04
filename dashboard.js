@@ -627,14 +627,15 @@ function computeDocentMetrics() {
             teacher.urenPerDag[day] = realSlots.length;
 
             // Pendel-detectie: bouw blokken per branch, detecteer bewegingen
-            // Excludeer WNA uit pendel-analyse
+            // Excludeer WNA en lessen zonder bekende branch
             const realForPendel = dayLessons.filter(a => !wnaSlots.has(a.slot));
             const withBranch = realForPendel
                 .sort((a, b) => a.slot - b.slot)
                 .map(a => ({
                     slot: a.slot,
-                    branch: state.locationToBranch[a.locations[0]] || 'Onbekend',
-                }));
+                    branch: state.locationToBranch[a.locations[0]] || null,
+                }))
+                .filter(a => a.branch != null); // Alleen lessen met bekende branch
 
             // Bouw blokken: opeenvolgende lessen aan dezelfde branch
             const blocks = [];
