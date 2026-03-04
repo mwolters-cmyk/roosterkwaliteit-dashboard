@@ -43,10 +43,8 @@ const COLORS = {
 const KEY_INDICATORS = {
     D1: { label: 'Lokaalwissel buiten pauze', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
     D2: { label: 'Tussenuren >2/week', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
-    D3: { label: '5+ uur aaneengesloten', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
     D4: { label: 'Pendel zonder reistijd', unit: '%', green: 0, orange: 25, higherIsBetter: false, category: 'docenten' },
     D5: { label: 'Late uren >1/week', unit: '%', green: 10, orange: 25, higherIsBetter: false, category: 'docenten' },
-    D6: { label: 'Fairness spreiding', unit: '', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
     O1: { label: 'Klassen met tussenuren', unit: '%', green: 5, orange: 20, higherIsBetter: false, category: 'onderbouw' },
     O2: { label: 'Mentoruur aan rand', unit: '%', green: 90, orange: 70, higherIsBetter: true, category: 'onderbouw' },
     O3: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'onderbouw' },
@@ -54,7 +52,6 @@ const KEY_INDICATORS = {
     B1: { label: 'Tussenuren ≥3 op dag', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
     B2: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
     B3: { label: 'Leerlingen met 9e uur', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'bovenbouw' },
-    S1: { label: 'Uitval', unit: '%', green: 3, orange: 8, higherIsBetter: false, category: 'school' },
 };
 
 // ================================================================
@@ -234,11 +231,8 @@ function initCumLaudeUpload() {
             label.classList.add('loaded');
             console.log(`CumLaude: ${count} bovenbouw leerlingen geladen`);
 
-            // Re-render if data already loaded
-            if (state.docentMetrics) {
-                computeAllMetrics();
-                renderDashboard();
-            }
+            // Auto-trigger: load all weeks after Excel upload
+            await triggerLoadAllWeeks();
         } catch (err) {
             statusEl.textContent = 'Fout: ' + err.message;
             console.error('CumLaude parse error:', err);
@@ -524,12 +518,35 @@ function computeDocentMetrics() {
             const realSlots = uniqueSlots.filter(s => !wnaSlots.has(s));
             teacher.urenPerDag[day] = realSlots.length;
 
-            // Tussenuren: gaten + wna-uren tussen eerste en laatste lesuur
+            // Pendel-check: teaches at both locations on same day (must be before tussenuren)
+            const dayBranches = new Set();
+            for (const a of dayLessons) {
+                for (const loc of a.locations) {
+                    const branch = state.locationToBranch[loc];
+                    if (branch) dayBranches.add(branch);
+                }
+            }
+            let pendelGapSlots = new Set();
+            if (dayBranches.size > 1) {
+                teacher.pendelt = true;
+                const reistijdOk = checkReistijd(dayLessons, state.locationToBranch);
+                teacher.pendelDagen.push({
+                    day,
+                    locaties: [...dayBranches].join(' + '),
+                    reistijdOk,
+                });
+                // Identify pendel gap slots: the free slots between locations used for travel
+                if (reistijdOk) {
+                    pendelGapSlots = findPendelGapSlots(dayLessons, state.locationToBranch);
+                }
+            }
+
+            // Tussenuren: gaten + wna-uren, maar NIET pendel-reistijd gaten
             if (uniqueSlots.length >= 2) {
                 const first = uniqueSlots[0];
                 const last = uniqueSlots[uniqueSlots.length - 1];
                 for (let s = first + 1; s < last; s++) {
-                    // Tel als tussenuur als slot leeg is OF als het een wna-uur is
+                    if (pendelGapSlots.has(s)) continue; // pendel-reistijd, niet meetellen
                     if (!uniqueSlots.includes(s) || wnaSlots.has(s)) {
                         teacher.tussenuren[day]++;
                     }
@@ -554,9 +571,10 @@ function computeDocentMetrics() {
             }
             teacher.maxAaneengesloten = Math.max(teacher.maxAaneengesloten, streak);
 
-            // Lokalen per dag
+            // Lokalen per dag (excl. wna-uren — andere kamer voor opvang telt niet mee)
             const dayRooms = new Set();
             for (const a of dayLessons) {
+                if (wnaSlots.has(a.slot)) continue;
                 for (const loc of a.locations) {
                     dayRooms.add(loc);
                     teacher.lokalen.add(loc);
@@ -564,18 +582,16 @@ function computeDocentMetrics() {
             }
             lokaalPerDag[day] = dayRooms;
 
-            // Check room changes within day
+            // Check room changes within day (excl. wna)
+            const realLessons = dayLessons.filter(a => !wnaSlots.has(a.slot));
             if (dayRooms.size > 1) {
                 hasMultipleRooms = true;
-                // Check each consecutive pair of lessons
-                for (let i = 1; i < dayLessons.length; i++) {
-                    const prevLoc = dayLessons[i - 1].locations[0] || '';
-                    const currLoc = dayLessons[i].locations[0] || '';
+                for (let i = 1; i < realLessons.length; i++) {
+                    const prevLoc = realLessons[i - 1].locations[0] || '';
+                    const currLoc = realLessons[i].locations[0] || '';
                     if (prevLoc && currLoc && prevLoc !== currLoc) {
-                        const prevSlot = dayLessons[i - 1].slot;
-                        const currSlot = dayLessons[i].slot;
-                        // Only count as problematic if slots are truly consecutive (no gap)
-                        // If there's a free period between, the teacher has time to move
+                        const prevSlot = realLessons[i - 1].slot;
+                        const currSlot = realLessons[i].slot;
                         if (currSlot - prevSlot === 1) {
                             const transition = `${prevSlot}-${currSlot}`;
                             if (!PAUZE_TRANSITIONS.has(transition)) {
@@ -585,27 +601,6 @@ function computeDocentMetrics() {
                         }
                     }
                 }
-            }
-
-            // Pendel-check: teaches at both locations on same day
-            const dayBranches = new Set();
-            for (const a of dayLessons) {
-                for (const loc of a.locations) {
-                    const branch = state.locationToBranch[loc];
-                    if (branch) dayBranches.add(branch);
-                }
-            }
-            if (dayBranches.size > 1) {
-                teacher.pendelt = true;
-                // Check if enough travel time
-                const branches = [...dayBranches];
-                // Find last lesson at branch A and first lesson at branch B
-                // For simplicity, flag as pendel day
-                teacher.pendelDagen.push({
-                    day,
-                    locaties: [...dayBranches].join(' + '),
-                    reistijdOk: checkReistijd(dayLessons, state.locationToBranch),
-                });
             }
         }
 
@@ -688,6 +683,50 @@ function checkReistijd(dayLessons, locationToBranch) {
         }
     }
     return true;
+}
+
+/**
+ * Find the gap slots used for pendel travel between branches.
+ * Returns a Set of slot numbers that are "travel time" between locations.
+ */
+function findPendelGapSlots(dayLessons, locationToBranch) {
+    const byBranch = {};
+    for (const a of dayLessons) {
+        const branch = locationToBranch[a.locations[0]] || 'Onbekend';
+        if (!byBranch[branch]) byBranch[branch] = [];
+        byBranch[branch].push(a.slot);
+    }
+
+    const branchNames = Object.keys(byBranch);
+    const gapSlots = new Set();
+    if (branchNames.length < 2) return gapSlots;
+
+    for (let i = 0; i < branchNames.length; i++) {
+        for (let j = i + 1; j < branchNames.length; j++) {
+            const slotsA = byBranch[branchNames[i]].sort((a, b) => a - b);
+            const slotsB = byBranch[branchNames[j]].sort((a, b) => a - b);
+            const lastA = slotsA[slotsA.length - 1];
+            const firstB = slotsB[0];
+            const lastB = slotsB[slotsB.length - 1];
+            const firstA = slotsA[0];
+
+            // Determine which direction: A→B or B→A
+            let gapStart, gapEnd;
+            if (firstB > lastA) {
+                gapStart = lastA + 1;
+                gapEnd = firstB;
+            } else if (firstA > lastB) {
+                gapStart = lastB + 1;
+                gapEnd = firstA;
+            }
+            if (gapStart != null) {
+                for (let s = gapStart; s < gapEnd; s++) {
+                    gapSlots.add(s);
+                }
+            }
+        }
+    }
+    return gapSlots;
 }
 
 // ================================================================
@@ -1214,8 +1253,7 @@ function computeIndicator(key, value) {
 function computeIndicators() {
     const dm = state.docentMetrics;
     const lm = state.leerlingMetrics;
-    const am = state.achterafMetrics;
-    if (!dm || !lm || !am) return;
+    if (!dm || !lm) return;
 
     // Bereken voor alle drie locatiefilters
     state.indicatorsByLocation = {};
@@ -1268,18 +1306,12 @@ function computeIndicatorsForFilter(locationFilter) {
     // === DOCENTEN ===
     indicators.D1 = computeIndicator('D1', n > 0 ? teachers.filter(t => t.lokaalRating === 4).length / n * 100 : 0);
     indicators.D2 = computeIndicator('D2', n > 0 ? teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100 : 0);
-    indicators.D3 = computeIndicator('D3', n > 0 ? teachers.filter(t => t.maxAaneengesloten >= 5).length / n * 100 : 0);
 
     const pend = teachers.filter(t => t.pendelt);
     indicators.D4 = computeIndicator('D4', pend.length > 0
         ? pend.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pend.length * 100 : 0);
 
     indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
-
-    const fScores = teachers.map(t => t.fairnessScore);
-    const fMean = fScores.length > 0 ? fScores.reduce((s, v) => s + v, 0) / fScores.length : 0;
-    const fVar = fScores.length > 0 ? fScores.reduce((s, v) => s + (v - fMean) ** 2, 0) / fScores.length : 0;
-    indicators.D6 = computeIndicator('D6', Math.sqrt(fVar));
 
     // === ONDERBOUW ===
     const nk = klassen.length;
@@ -1304,9 +1336,6 @@ function computeIndicatorsForFilter(locationFilter) {
         indicators.B3 = computeIndicator('B3', totalSt > 0 ? u9 / totalSt * 100 : 0);
     }
 
-    // === SCHOOL-BREED: uitval per locatie ===
-    indicators.S1 = computeIndicator('S1', computeUitvalForFilter(locationFilter));
-
     // Subtotalen
     const categories = {};
     for (const [key, ind] of Object.entries(indicators)) {
@@ -1324,24 +1353,6 @@ function computeIndicatorsForFilter(locationFilter) {
     return { indicators, subtotals, overall };
 }
 
-function computeUitvalForFilter(locationFilter) {
-    const seen = new Set();
-    let total = 0, cancelled = 0;
-    for (const [, appts] of Object.entries(state.teacherAppointments)) {
-        for (const a of appts) {
-            if (a.slot <= 0 || a.type !== 'lesson') continue;
-            if (a.subjects.some(s => EXCLUDED_SUBJECTS.has(s.toLowerCase()))) continue;
-            if (locationFilter !== 'alle' && !a.locations.some(loc => state.locationToBranch[loc] === locationFilter)) continue;
-            const key = `${a.day}-${a.slot}-${a.teachers.join(',')}-${a.subjects.join(',')}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            total++;
-            if (a.cancelled) cancelled++;
-        }
-    }
-    return total > 0 ? +(cancelled / total * 100).toFixed(1) : 0;
-}
-
 function saveWeekScore() {
     const weekCode = document.getElementById('week-select')?.value;
     if (!weekCode || !state.indicatorsByLocation) return;
@@ -1357,6 +1368,12 @@ function saveWeekScore() {
             onderbouw: d.subtotals.onderbouw ?? null,
             bovenbouw: d.subtotals.bovenbouw ?? null,
         };
+        // Save individual indicator values for trend charts
+        const vals = {};
+        for (const [key, ind] of Object.entries(d.indicators)) {
+            vals[key] = ind.value;
+        }
+        entry[loc].indicatorValues = vals;
     }
     stored[weekCode] = entry;
     localStorage.setItem('rooster_scores', JSON.stringify(stored));
@@ -1369,12 +1386,10 @@ function saveWeekScore() {
 function computeAllMetrics() {
     state.docentMetrics = computeDocentMetrics();
     state.leerlingMetrics = computeLeerlingMetrics();
-    state.achterafMetrics = computeAchterafMetrics();
     computeIndicators();
     console.log('Metrics computed:', {
         docenten: state.docentMetrics.totalTeachers,
         klassen: state.leerlingMetrics.totalKlassen,
-        lessen: state.achterafMetrics.totalLessen,
         overall: state.overallScore,
     });
 }
@@ -1402,7 +1417,6 @@ function renderDashboard() {
     switch (state.activeTab) {
         case 'docenten': renderDocenten(); break;
         case 'leerlingen': renderLeerlingen(); break;
-        case 'achteraf': renderAchteraf(); break;
     }
 }
 
@@ -1424,8 +1438,9 @@ function renderDocenten() {
     // Apply location filter
     const teachers = filterByLocation(m.teachers, 'teacher');
 
-    // Indicator cards
-    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']);
+    // Indicator cards + trend
+    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D4', 'D5']);
+    renderDocentTrendChart();
 
     // KPIs
     setText('kpi-doc-total', teachers.length);
@@ -2517,37 +2532,25 @@ function renderTrendChart() {
     const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
     const currentWeek = document.getElementById('week-select')?.value;
 
-    // Per-locatie lijnen: SGL, Athena, Socrates (elk overall score)
+    // Per-locatie lijnen met uitsplitsing docenten/leerlingen
+    const mkLine = (label, getter, color, width, dashed) => ({
+        label,
+        data: entries.map(getter),
+        borderColor: color,
+        backgroundColor: color.replace('0.9', '0.1'),
+        borderWidth: width,
+        borderDash: dashed ? [5, 3] : [],
+        tension: 0.3,
+        pointRadius: entries.map(e => e.week === currentWeek ? (width > 2 ? 7 : 5) : 2),
+        spanGaps: false,
+    });
+
     const datasets = [
-        {
-            label: 'SGL',
-            data: entries.map(e => e.alle?.overall ?? e.overall ?? null),
-            borderColor: 'rgba(26, 82, 118, 0.9)',
-            backgroundColor: 'rgba(26, 82, 118, 0.1)',
-            borderWidth: 3,
-            tension: 0.3,
-            pointRadius: entries.map(e => e.week === currentWeek ? 7 : 3),
-        },
-        {
-            label: 'Athena',
-            data: entries.map(e => e.Athena?.overall ?? null),
-            borderColor: 'rgba(41, 128, 185, 0.9)',
-            backgroundColor: 'rgba(41, 128, 185, 0.1)',
-            borderWidth: 2,
-            tension: 0.3,
-            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
-            spanGaps: false,
-        },
-        {
-            label: 'Socrates',
-            data: entries.map(e => e.Socrates?.overall ?? null),
-            borderColor: 'rgba(230, 126, 34, 0.9)',
-            backgroundColor: 'rgba(230, 126, 34, 0.1)',
-            borderWidth: 2,
-            tension: 0.3,
-            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
-            spanGaps: false,
-        },
+        mkLine('SGL Overall', e => e.alle?.overall ?? e.overall ?? null, 'rgba(26, 82, 118, 0.9)', 3, false),
+        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(26, 82, 118, 0.5)', 1.5, true),
+        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(26, 82, 118, 0.5)', 1.5, [2, 2]),
+        mkLine('Athena', e => e.Athena?.overall ?? null, 'rgba(41, 128, 185, 0.9)', 2, false),
+        mkLine('Socrates', e => e.Socrates?.overall ?? null, 'rgba(230, 126, 34, 0.9)', 2, false),
     ];
 
     if (state.charts.trend) state.charts.trend.destroy();
@@ -2585,6 +2588,62 @@ function renderTrendChart() {
 
 // ================================================================
 // HELPER FUNCTIONS
+function renderDocentTrendChart() {
+    const section = document.getElementById('doc-trend-section');
+    if (!section) return;
+
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = Object.values(stored).sort((a, b) => a.week.localeCompare(b.week));
+
+    if (entries.length < 2) {
+        section.classList.add('hidden');
+        return;
+    }
+    section.classList.remove('hidden');
+
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
+    const locKey = state.activeFilter === 'alle' ? 'alle' : state.activeFilter;
+
+    const kpiDefs = [
+        { key: 'D1', label: 'Lokaalwissel buiten pauze (%)', color: 'rgba(231, 76, 60, 0.8)' },
+        { key: 'D2', label: 'Tussenuren >2/week (%)', color: 'rgba(230, 126, 34, 0.8)' },
+        { key: 'D4', label: 'Pendel zonder reistijd (%)', color: 'rgba(155, 89, 182, 0.8)' },
+        { key: 'D5', label: 'Late uren >1/week (%)', color: 'rgba(41, 128, 185, 0.8)' },
+    ];
+
+    const datasets = kpiDefs.map(def => ({
+        label: def.label,
+        data: entries.map(e => e[locKey]?.indicatorValues?.[def.key] ?? null),
+        borderColor: def.color,
+        backgroundColor: def.color.replace('0.8', '0.1'),
+        borderWidth: 2,
+        tension: 0.3,
+        pointRadius: 2,
+        spanGaps: false,
+    }));
+
+    if (state.charts.docTrend) state.charts.docTrend.destroy();
+    state.charts.docTrend = new Chart(
+        document.getElementById('chart-doc-trend'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        min: 0,
+                        title: { display: true, text: '%' },
+                    },
+                },
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                },
+            },
+        }
+    );
+}
+
 // ================================================================
 
 function setText(id, text) {
@@ -2746,45 +2805,37 @@ function initLeerlingSubFilter() {
 }
 
 function initLoadButton() {
-    document.getElementById('btn-load').addEventListener('click', async () => {
+    document.getElementById('btn-load-all').addEventListener('click', async () => {
+        await triggerLoadAllWeeks();
+    });
+
+    // Week selector change: load that specific week for viewing
+    document.getElementById('week-select').addEventListener('change', async () => {
         const weekCode = document.getElementById('week-select').value;
-        if (!weekCode) return;
-
-        const btn = document.getElementById('btn-load');
-        btn.disabled = true;
-        btn.textContent = 'Bezig...';
-
+        if (!weekCode || !state.docentMetrics) return;
         try {
             await loadWeekData(weekCode);
         } catch (e) {
-            console.error('Load failed:', e);
-            alert('Fout bij laden: ' + e.message);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Laden';
-            showProgress(false);
+            console.error('Week switch failed:', e);
         }
     });
+}
 
-    document.getElementById('btn-load-all').addEventListener('click', async () => {
-        const btn = document.getElementById('btn-load-all');
-        const loadBtn = document.getElementById('btn-load');
-        btn.disabled = true;
-        loadBtn.disabled = true;
-        btn.textContent = 'Bezig...';
+async function triggerLoadAllWeeks() {
+    const btn = document.getElementById('btn-load-all');
+    btn.disabled = true;
+    btn.textContent = 'Bezig...';
 
-        try {
-            await loadAllWeeks();
-        } catch (e) {
-            console.error('Load all failed:', e);
-            alert('Fout bij laden: ' + e.message);
-        } finally {
-            btn.disabled = false;
-            loadBtn.disabled = false;
-            btn.textContent = 'Alle weken';
-            showProgress(false);
-        }
-    });
+    try {
+        await loadAllWeeks();
+    } catch (e) {
+        console.error('Load all failed:', e);
+        alert('Fout bij laden: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Alle weken laden';
+        showProgress(false);
+    }
 }
 
 // ================================================================
@@ -2861,7 +2912,6 @@ async function init() {
         'doc-tussenuren-table', 'doc-lokaal-table', 'doc-pendel-table',
         'll-tussenuren-table', 'll-late-table', 'll-blokuren-table', 'll-spreiding-table',
         'bv-tussenuren-table', 'bv-blokuren-table',
-        'ach-docent-table',
     ];
     for (const id of tableIds) initSortableTable(id);
 

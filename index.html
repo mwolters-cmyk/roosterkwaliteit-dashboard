@@ -35,8 +35,7 @@
         <div class="filter-group">
             <label>Week:</label>
             <select id="week-select"></select>
-            <button id="btn-load" class="btn-primary">Laden</button>
-            <button id="btn-load-all" class="btn-secondary" title="Alle weken laden voor trendgrafiek">Alle weken</button>
+            <button id="btn-load-all" class="btn-primary">Alle weken laden</button>
         </div>
         <div class="filter-group">
             <label>Locatie:</label>
@@ -61,12 +60,13 @@
     <nav id="tab-nav">
         <button class="tab-btn active" data-tab="docenten">Docenten</button>
         <button class="tab-btn" data-tab="leerlingen">Leerlingen</button>
-        <button class="tab-btn" data-tab="achteraf">Achteraf</button>
     </nav>
 
     <!-- Placeholder: shown before data is loaded -->
     <div id="placeholder">
-        <p>Selecteer een week en klik op <strong>Laden</strong> om het rooster te analyseren.</p>
+        <p><strong>Stap 1:</strong> Upload de CumLaude Excel (bovenbouw leerling-lesgroep koppeling).<br>
+        <strong>Stap 2:</strong> Klik op <strong>Alle weken laden</strong> &mdash; het dashboard analyseert automatisch alle weken.<br>
+        <em>Tip: als je eerst de Excel uploadt, worden alle weken automatisch geladen.</em></p>
     </div>
 
     <!-- ===================== OVERALL RAPPORTCIJFER ===================== -->
@@ -110,6 +110,14 @@
 
         <!-- Docent Indicators -->
         <div id="doc-indicators" class="indicator-section"></div>
+
+        <!-- Docent KPI Trend -->
+        <div id="doc-trend-section" class="chart-section hidden">
+            <h2>Docenten KPI's over tijd</h2>
+            <div class="chart-container-wide" style="min-height:250px">
+                <canvas id="chart-doc-trend"></canvas>
+            </div>
+        </div>
 
         <!-- Management Summary -->
         <div id="doc-summary" class="mgmt-summary"></div>
@@ -475,59 +483,6 @@
 
     </section>
 
-    <!-- ===================== TAB 3: ACHTERAF ===================== -->
-    <section id="tab-achteraf" class="tab-content hidden">
-
-        <!-- Achteraf Indicator -->
-        <div id="ach-indicators" class="indicator-section"></div>
-
-        <!-- Management Summary -->
-        <div id="ach-summary" class="mgmt-summary"></div>
-
-        <!-- KPI Cards -->
-        <div id="ach-kpi" class="kpi-section">
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ach-uitval">-</div>
-                <div class="kpi-label">Uitvalpercentage</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ach-vervangen">-</div>
-                <div class="kpi-label">Vervangen</div>
-            </div>
-        </div>
-
-        <!-- Uitval per vak -->
-        <div class="chart-section">
-            <h2>Uitval per vak</h2>
-            <div class="chart-container-wide">
-                <canvas id="chart-ach-vak"></canvas>
-            </div>
-        </div>
-
-        <!-- Uitval per dag/uur -->
-        <div class="chart-section">
-            <h2>Uitval per dag/uur</h2>
-            <div id="ach-heatmap"></div>
-        </div>
-
-        <!-- Uitval per docent -->
-        <div class="chart-section">
-            <h2>Uitval per docent</h2>
-            <div class="table-container">
-                <table id="ach-docent-table" class="data-table sortable">
-                    <thead>
-                        <tr>
-                            <th data-sort="name">Docent</th>
-                            <th data-sort="gepland">Gepland</th>
-                            <th data-sort="uitval">Uitgevallen</th>
-                            <th data-sort="pct">Percentage</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-    </section>
 </main>
 
 <footer>
