@@ -36,6 +36,7 @@
             <label>Week:</label>
             <select id="week-select"></select>
             <button id="btn-load" class="btn-primary">Laden</button>
+            <button id="btn-load-all" class="btn-secondary" title="Alle weken laden voor trendgrafiek">Alle weken</button>
         </div>
         <div class="filter-group">
             <label>Locatie:</label>
@@ -72,7 +73,26 @@
     <div id="overall-score-section" class="hidden">
         <div class="score-card">
             <div class="score-label">ROOSTERKWALITEIT</div>
-            <div class="score-value" id="overall-score">-</div>
+            <div class="score-grid">
+                <div class="score-col">
+                    <div class="score-col-label">SGL</div>
+                    <div class="score-number" id="score-sgl">-</div>
+                    <div class="score-sub"><span class="score-sub-label">Doc:</span> <span id="score-sgl-doc">-</span></div>
+                    <div class="score-sub"><span class="score-sub-label">Ll:</span> <span id="score-sgl-ll">-</span></div>
+                </div>
+                <div class="score-col">
+                    <div class="score-col-label">Athena</div>
+                    <div class="score-number" id="score-athena">-</div>
+                    <div class="score-sub"><span class="score-sub-label">Doc:</span> <span id="score-athena-doc">-</span></div>
+                    <div class="score-sub"><span class="score-sub-label">Ll:</span> <span id="score-athena-ll">-</span></div>
+                </div>
+                <div class="score-col">
+                    <div class="score-col-label">Socrates</div>
+                    <div class="score-number" id="score-socrates">-</div>
+                    <div class="score-sub"><span class="score-sub-label">Doc:</span> <span id="score-socrates-doc">-</span></div>
+                    <div class="score-sub"><span class="score-sub-label">Ll:</span> <span id="score-socrates-ll">-</span></div>
+                </div>
+            </div>
             <div class="score-subtitle" id="overall-score-subtitle"></div>
         </div>
     </div>

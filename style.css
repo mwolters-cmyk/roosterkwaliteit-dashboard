@@ -85,6 +85,20 @@ main { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
 .btn-primary:hover { background: var(--primary-light); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.btn-secondary {
+    padding: 0.4rem 1rem;
+    background: white;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-secondary:hover { background: var(--primary); color: white; }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .filter-btn {
     padding: 0.35rem 1rem;
     border: 1px solid var(--border);
@@ -477,6 +491,39 @@ footer {
     font-size: 0.85rem;
     color: var(--text-light);
 }
+/* Score grid: 3-column layout (SGL / Athena / Socrates) */
+.score-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1.5rem;
+    margin: 0.75rem 0;
+}
+.score-col {
+    text-align: center;
+}
+.score-col-label {
+    font-size: 0.75rem;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+    margin-bottom: 0.1rem;
+}
+.score-number {
+    font-size: 3rem;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 0.25rem;
+}
+.score-sub {
+    font-size: 0.8rem;
+    color: var(--text-light);
+    line-height: 1.5;
+}
+.score-sub-label {
+    font-weight: 600;
+}
+
 .score-green { color: var(--success); }
 .score-orange { color: var(--accent); }
 .score-red { color: var(--accent-red); }

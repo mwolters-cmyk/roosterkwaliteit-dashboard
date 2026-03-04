@@ -366,8 +366,34 @@ function parseLiveschedule(data) {
     return appointments;
 }
 
-async function loadWeekData(weekCode) {
+async function loadAllWeeks() {
+    const select = document.getElementById('week-select');
+    const originalWeek = select.value;
+    const now = new Date();
+    const currentWeekCode = `${getISOWeekYear(now)}${String(getISOWeek(now)).padStart(2, '0')}`;
+
+    // Only load weeks up to current week
+    const allWeeks = [...select.options]
+        .map(o => o.value)
+        .filter(w => w <= currentWeekCode);
+
     showProgress(true);
+    for (let i = 0; i < allWeeks.length; i++) {
+        updateProgress(i, allWeeks.length, `Week ${parseInt(allWeeks[i].slice(4))} (${i + 1}/${allWeeks.length})`);
+        try {
+            await loadWeekData(allWeeks[i], { silent: true });
+        } catch (e) {
+            console.warn(`Failed to load week ${allWeeks[i]}:`, e);
+        }
+    }
+
+    // Reload original week with rendering
+    updateProgress(allWeeks.length, allWeeks.length, 'Klaar! Dashboard herladen...');
+    await loadWeekData(originalWeek);
+}
+
+async function loadWeekData(weekCode, { silent = false } = {}) {
+    if (!silent) showProgress(true);
     state.groupAppointments = {};
     state.teacherAppointments = {};
 
@@ -377,10 +403,10 @@ async function loadWeekData(weekCode) {
         apiGet('liveschedule', { week: weekCode, teacher: code })
     );
 
-    updateProgress(0, teacherTasks.length, 'Docenten laden');
-    const teacherResults = await parallelFetch(teacherTasks, (done, total) =>
-        updateProgress(done, total, `Docenten laden`)
-    );
+    if (!silent) updateProgress(0, teacherTasks.length, 'Docenten laden');
+    const teacherResults = await parallelFetch(teacherTasks, (done, total) => {
+        if (!silent) updateProgress(done, total, `Docenten laden`);
+    });
 
     // Parse teacher results
     let teachersWithData = 0;
@@ -422,11 +448,11 @@ async function loadWeekData(weekCode) {
     }
 
     console.log('Groups with schedule data:', Object.keys(state.groupAppointments).length);
-    showProgress(false);
+    if (!silent) showProgress(false);
 
     // Compute all metrics
     computeAllMetrics();
-    renderDashboard();
+    if (!silent) renderDashboard();
 }
 
 // ================================================================
@@ -1004,6 +1030,8 @@ function computeBovenbouwMetrics() {
             avgLateUren: +avgLate.toFixed(1),
             avgLaatsteUur: avgLaatsteUur,
             studentsWithTussenuren: perStudent.filter(m => m.tussenuren > 0).length,
+            studentsWithMaxTussen3Plus: perStudent.filter(ps => Math.max(...Object.values(ps.tussenPerDag)) >= 3).length,
+            studentsWithUur9: perStudent.filter(ps => ps.lateUren9 > 0).length,
         });
     }
 
@@ -1189,71 +1217,97 @@ function computeIndicators() {
     const am = state.achterafMetrics;
     if (!dm || !lm || !am) return;
 
+    // Bereken voor alle drie locatiefilters
+    state.indicatorsByLocation = {};
+    for (const loc of ['alle', 'Athena', 'Socrates']) {
+        state.indicatorsByLocation[loc] = computeIndicatorsForFilter(loc);
+    }
+
+    // Backward compat: state.indicators/subtotals/overallScore = 'alle'
+    const alle = state.indicatorsByLocation.alle;
+    state.indicators = alle.indicators;
+    state.subtotals = alle.subtotals;
+    state.overallScore = alle.overall;
+
+    saveWeekScore();
+    console.log('Indicators per locatie:', {
+        SGL: state.indicatorsByLocation.alle.overall,
+        Athena: state.indicatorsByLocation.Athena.overall,
+        Socrates: state.indicatorsByLocation.Socrates.overall,
+    });
+}
+
+function computeIndicatorsForFilter(locationFilter) {
+    const dm = state.docentMetrics;
+    const lm = state.leerlingMetrics;
+
+    // Filter teachers by location
+    let teachers = dm.teachers;
+    if (locationFilter !== 'alle') {
+        teachers = teachers.filter(t => {
+            const appts = state.teacherAppointments[t.code] || [];
+            return appts.some(a => a.locations.some(loc => state.locationToBranch[loc] === locationFilter));
+        });
+    }
+
+    // Filter onderbouw klassen
+    let klassen = lm.klassen;
+    if (locationFilter !== 'alle') {
+        klassen = klassen.filter(k => k.branchName === locationFilter);
+    }
+
+    // Filter bovenbouw klassen
+    let bvKlassen = lm.bovenbouw?.klassen;
+    if (bvKlassen && locationFilter !== 'alle') {
+        bvKlassen = bvKlassen.filter(k => k.branchName === locationFilter);
+    }
+
     const indicators = {};
+    const n = teachers.length;
 
     // === DOCENTEN ===
-    // D1: % docenten met lokaalwissel buiten pauze (rating 4)
-    indicators.D1 = computeIndicator('D1', dm.totalTeachers > 0
-        ? dm.teachers.filter(t => t.lokaalRating === 4).length / dm.totalTeachers * 100 : 0);
+    indicators.D1 = computeIndicator('D1', n > 0 ? teachers.filter(t => t.lokaalRating === 4).length / n * 100 : 0);
+    indicators.D2 = computeIndicator('D2', n > 0 ? teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100 : 0);
+    indicators.D3 = computeIndicator('D3', n > 0 ? teachers.filter(t => t.maxAaneengesloten >= 5).length / n * 100 : 0);
 
-    // D2: % docenten met tussenuren >2/week
-    indicators.D2 = computeIndicator('D2', dm.totalTeachers > 0
-        ? dm.teachers.filter(t => t.tussenuren.totaal > 2).length / dm.totalTeachers * 100 : 0);
+    const pend = teachers.filter(t => t.pendelt);
+    indicators.D4 = computeIndicator('D4', pend.length > 0
+        ? pend.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pend.length * 100 : 0);
 
-    // D3: % docenten met 5+ aaneengesloten lesuren
-    indicators.D3 = computeIndicator('D3', dm.totalTeachers > 0
-        ? dm.teachers.filter(t => t.maxAaneengesloten >= 5).length / dm.totalTeachers * 100 : 0);
+    indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
 
-    // D4: % pendelaars zonder voldoende reistijd
-    const pendelaars = dm.pendelaars;
-    indicators.D4 = computeIndicator('D4', pendelaars.length > 0
-        ? pendelaars.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pendelaars.length * 100 : 0);
-
-    // D5: % docenten met meer dan 1 late uur (8e/9e)
-    indicators.D5 = computeIndicator('D5', dm.totalTeachers > 0
-        ? dm.teachers.filter(t => t.lateUren > 1).length / dm.totalTeachers * 100 : 0);
-
-    // D6: stdev van fairnessScore (spreiding belasting)
-    const fScores = dm.teachers.map(t => t.fairnessScore);
+    const fScores = teachers.map(t => t.fairnessScore);
     const fMean = fScores.length > 0 ? fScores.reduce((s, v) => s + v, 0) / fScores.length : 0;
     const fVar = fScores.length > 0 ? fScores.reduce((s, v) => s + (v - fMean) ** 2, 0) / fScores.length : 0;
     indicators.D6 = computeIndicator('D6', Math.sqrt(fVar));
 
     // === ONDERBOUW ===
-    // O1: % klassen met tussenuren op enige dag
-    indicators.O1 = computeIndicator('O1', lm.totalKlassen > 0
-        ? lm.klassen.filter(k => k.tussenuren.totaal > 0).length / lm.totalKlassen * 100 : 0);
+    const nk = klassen.length;
+    indicators.O1 = computeIndicator('O1', nk > 0 ? klassen.filter(k => k.tussenuren.totaal > 0).length / nk * 100 : 0);
 
-    // O2: % mentoruren aan rand van dag (hoger = beter)
-    indicators.O2 = computeIndicator('O2', lm.mentorRand);
+    const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
+    const randMentor = klassen.reduce((s, k) => s + k.mentorAanRand, 0);
+    indicators.O2 = computeIndicator('O2', totalMentor > 0 ? Math.round((randMentor / totalMentor) * 100) : 100);
 
-    // O3: % onwenselijke blokuren (onderbouw)
-    const obBlok = lm.klassen.flatMap(k => k.blokuren);
-    indicators.O3 = computeIndicator('O3', obBlok.length > 0
-        ? obBlok.filter(b => !b.isOk).length / obBlok.length * 100 : 0);
+    const obBlok = klassen.flatMap(k => k.blokuren);
+    indicators.O3 = computeIndicator('O3', obBlok.length > 0 ? obBlok.filter(b => !b.isOk).length / obBlok.length * 100 : 0);
+    indicators.O4 = computeIndicator('O4', nk > 0 ? klassen.filter(k => k.lateUren8 + k.lateUren9 > 0).length / nk * 100 : 0);
 
-    // O4: % klassen met 8e of 9e uur
-    indicators.O4 = computeIndicator('O4', lm.totalKlassen > 0
-        ? lm.klassen.filter(k => k.lateUren8 + k.lateUren9 > 0).length / lm.totalKlassen * 100 : 0);
-
-    // === BOVENBOUW (alleen met CumLaude data) ===
-    if (lm.bovenbouw) {
-        const bv = lm.bovenbouw;
-        // B1: % leerlingen met max tussenuren ≥3 op 1 dag
-        indicators.B1 = computeIndicator('B1', bv.totalStudents > 0
-            ? bv.studentsWithMaxTussen3Plus / bv.totalStudents * 100 : 0);
-        // B2: % onwenselijke blokuren bovenbouw vakgroepen
-        indicators.B2 = computeIndicator('B2', bv.vakgroepBlokuren.length > 0
-            ? bv.vakgroepBlokuren.filter(b => !b.isOk).length / bv.vakgroepBlokuren.length * 100 : 0);
-        // B3: % leerlingen met 9e uur
-        indicators.B3 = computeIndicator('B3', bv.totalStudents > 0
-            ? bv.studentsWithUur9 / bv.totalStudents * 100 : 0);
+    // === BOVENBOUW ===
+    if (bvKlassen && bvKlassen.length > 0) {
+        const totalSt = bvKlassen.reduce((s, k) => s + k.studentCount, 0);
+        const mt3 = bvKlassen.reduce((s, k) => s + (k.studentsWithMaxTussen3Plus || 0), 0);
+        const u9 = bvKlassen.reduce((s, k) => s + (k.studentsWithUur9 || 0), 0);
+        indicators.B1 = computeIndicator('B1', totalSt > 0 ? mt3 / totalSt * 100 : 0);
+        const bvBlok = lm.bovenbouw.vakgroepBlokuren;
+        indicators.B2 = computeIndicator('B2', bvBlok.length > 0 ? bvBlok.filter(b => !b.isOk).length / bvBlok.length * 100 : 0);
+        indicators.B3 = computeIndicator('B3', totalSt > 0 ? u9 / totalSt * 100 : 0);
     }
 
-    // === SCHOOL-BREED ===
-    indicators.S1 = computeIndicator('S1', parseFloat(am.uitvalPct) || 0);
+    // === SCHOOL-BREED: uitval per locatie ===
+    indicators.S1 = computeIndicator('S1', computeUitvalForFilter(locationFilter));
 
-    // Subtotalen per categorie
+    // Subtotalen
     const categories = {};
     for (const [key, ind] of Object.entries(indicators)) {
         const cat = KEY_INDICATORS[key].category;
@@ -1264,33 +1318,48 @@ function computeIndicators() {
     for (const [cat, scores] of Object.entries(categories)) {
         subtotals[cat] = +(scores.reduce((s, v) => s + v, 0) / scores.length).toFixed(1);
     }
-
-    // Overall = gemiddelde van alle indicator-scores
     const allScores = Object.values(indicators).map(i => i.score);
-    const overall = allScores.length > 0 ? allScores.reduce((s, v) => s + v, 0) / allScores.length : 0;
+    const overall = allScores.length > 0 ? +(allScores.reduce((s, v) => s + v, 0) / allScores.length).toFixed(1) : 0;
 
-    state.indicators = indicators;
-    state.subtotals = subtotals;
-    state.overallScore = +overall.toFixed(1);
+    return { indicators, subtotals, overall };
+}
 
-    // Sla score op voor trendgrafiek
-    saveWeekScore();
-    console.log('Indicators:', state.indicators, 'Overall:', state.overallScore);
+function computeUitvalForFilter(locationFilter) {
+    const seen = new Set();
+    let total = 0, cancelled = 0;
+    for (const [, appts] of Object.entries(state.teacherAppointments)) {
+        for (const a of appts) {
+            if (a.slot <= 0 || a.type !== 'lesson') continue;
+            if (a.subjects.some(s => EXCLUDED_SUBJECTS.has(s.toLowerCase()))) continue;
+            if (locationFilter !== 'alle' && !a.locations.some(loc => state.locationToBranch[loc] === locationFilter)) continue;
+            const key = `${a.day}-${a.slot}-${a.teachers.join(',')}-${a.subjects.join(',')}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            total++;
+            if (a.cancelled) cancelled++;
+        }
+    }
+    return total > 0 ? +(cancelled / total * 100).toFixed(1) : 0;
 }
 
 function saveWeekScore() {
     const weekCode = document.getElementById('week-select')?.value;
-    if (!weekCode || state.overallScore == null) return;
+    if (!weekCode || !state.indicatorsByLocation) return;
 
-    const allScores = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    allScores[weekCode] = {
-        week: weekCode,
-        overall: state.overallScore,
-        docenten: state.subtotals?.docenten ?? null,
-        onderbouw: state.subtotals?.onderbouw ?? null,
-        bovenbouw: state.subtotals?.bovenbouw ?? null,
-    };
-    localStorage.setItem('rooster_scores', JSON.stringify(allScores));
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entry = { week: weekCode };
+    for (const loc of ['alle', 'Athena', 'Socrates']) {
+        const d = state.indicatorsByLocation[loc];
+        entry[loc] = {
+            overall: d.overall,
+            docenten: d.subtotals.docenten ?? null,
+            leerlingen: +(((d.subtotals.onderbouw || 0) + (d.subtotals.bovenbouw || d.subtotals.onderbouw || 0)) / (d.subtotals.bovenbouw ? 2 : 1)).toFixed(1),
+            onderbouw: d.subtotals.onderbouw ?? null,
+            bovenbouw: d.subtotals.bovenbouw ?? null,
+        };
+    }
+    stored[weekCode] = entry;
+    localStorage.setItem('rooster_scores', JSON.stringify(stored));
 }
 
 // ================================================================
@@ -2377,31 +2446,48 @@ function renderAchterafDocent(m) {
 
 function renderOverallScore() {
     const section = document.getElementById('overall-score-section');
-    if (!section || !state.indicators) return;
+    if (!section || !state.indicatorsByLocation) return;
     section.classList.remove('hidden');
 
-    const score = state.overallScore;
-    const scoreEl = document.getElementById('overall-score');
-    const subtitleEl = document.getElementById('overall-score-subtitle');
+    // Render score per locatie
+    for (const [loc, elId] of [['alle', 'score-sgl'], ['Athena', 'score-athena'], ['Socrates', 'score-socrates']]) {
+        const d = state.indicatorsByLocation[loc];
+        if (!d) continue;
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const cls = d.overall >= 7 ? 'score-green' : d.overall >= 4 ? 'score-orange' : 'score-red';
+        el.className = 'score-number ' + cls;
+        el.textContent = d.overall.toFixed(1);
 
-    const cls = score >= 7 ? 'score-green' : score >= 4 ? 'score-orange' : 'score-red';
-    scoreEl.className = 'score-value ' + cls;
-    scoreEl.textContent = score.toFixed(1);
+        // Subtotalen docenten/leerlingen
+        const docEl = document.getElementById(elId + '-doc');
+        const llEl = document.getElementById(elId + '-ll');
+        if (docEl) docEl.textContent = d.subtotals.docenten?.toFixed(1) ?? '-';
+        if (llEl) {
+            const llScore = d.subtotals.bovenbouw
+                ? +((d.subtotals.onderbouw + d.subtotals.bovenbouw) / 2).toFixed(1)
+                : d.subtotals.onderbouw ?? null;
+            llEl.textContent = llScore?.toFixed(1) ?? '-';
+        }
+    }
 
+    // Subtitle met indicator telling
     const inds = Object.values(state.indicators);
     const g = inds.filter(i => i.status === 'green').length;
     const o = inds.filter(i => i.status === 'orange').length;
     const r = inds.filter(i => i.status === 'red').length;
-    subtitleEl.innerHTML = `${inds.length} indicatoren geanalyseerd &mdash; <span class="dot-green"></span>${g} groen &middot; <span class="dot-orange"></span>${o} oranje &middot; <span class="dot-red"></span>${r} rood`;
+    const subtitleEl = document.getElementById('overall-score-subtitle');
+    if (subtitleEl) subtitleEl.innerHTML = `${inds.length} indicatoren &mdash; <span class="dot-green"></span>${g} groen &middot; <span class="dot-orange"></span>${o} oranje &middot; <span class="dot-red"></span>${r} rood`;
 }
 
 function renderIndicatorCards(containerId, indicatorKeys) {
     const container = document.getElementById(containerId);
-    if (!container || !state.indicators) return;
+    if (!container || !state.indicatorsByLocation) return;
 
+    const locData = state.indicatorsByLocation[state.activeFilter] || state.indicatorsByLocation.alle;
     let html = '';
     for (const key of indicatorKeys) {
-        const ind = state.indicators[key];
+        const ind = locData.indicators[key];
         if (!ind) continue;
         const def = KEY_INDICATORS[key];
         const displayVal = def.unit === '%' ? ind.value + '%' : ind.value;
@@ -2419,8 +2505,8 @@ function renderTrendChart() {
     const section = document.getElementById('trend-section');
     if (!section) return;
 
-    const allScores = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = Object.values(allScores).sort((a, b) => a.week.localeCompare(b.week));
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = Object.values(stored).sort((a, b) => a.week.localeCompare(b.week));
 
     if (entries.length < 1) {
         section.classList.add('hidden');
@@ -2428,41 +2514,38 @@ function renderTrendChart() {
     }
     section.classList.remove('hidden');
 
-    const labels = entries.map(e => {
-        const week = parseInt(e.week.slice(4));
-        return `W${week}`;
-    });
-
+    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
     const currentWeek = document.getElementById('week-select')?.value;
 
+    // Per-locatie lijnen: SGL, Athena, Socrates (elk overall score)
     const datasets = [
         {
-            label: 'Docenten',
-            data: entries.map(e => e.docenten),
+            label: 'SGL',
+            data: entries.map(e => e.alle?.overall ?? e.overall ?? null),
             borderColor: 'rgba(26, 82, 118, 0.9)',
             backgroundColor: 'rgba(26, 82, 118, 0.1)',
+            borderWidth: 3,
             tension: 0.3,
-            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
-            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(26, 82, 118, 1)' : 'rgba(26, 82, 118, 0.6)'),
+            pointRadius: entries.map(e => e.week === currentWeek ? 7 : 3),
         },
         {
-            label: 'Onderbouw',
-            data: entries.map(e => e.onderbouw),
-            borderColor: 'rgba(39, 174, 96, 0.9)',
-            backgroundColor: 'rgba(39, 174, 96, 0.1)',
+            label: 'Athena',
+            data: entries.map(e => e.Athena?.overall ?? null),
+            borderColor: 'rgba(41, 128, 185, 0.9)',
+            backgroundColor: 'rgba(41, 128, 185, 0.1)',
+            borderWidth: 2,
             tension: 0.3,
             pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
-            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(39, 174, 96, 1)' : 'rgba(39, 174, 96, 0.6)'),
+            spanGaps: false,
         },
         {
-            label: 'Bovenbouw',
-            data: entries.map(e => e.bovenbouw),
+            label: 'Socrates',
+            data: entries.map(e => e.Socrates?.overall ?? null),
             borderColor: 'rgba(230, 126, 34, 0.9)',
             backgroundColor: 'rgba(230, 126, 34, 0.1)',
-            borderDash: [5, 5],
+            borderWidth: 2,
             tension: 0.3,
             pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
-            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(230, 126, 34, 1)' : 'rgba(230, 126, 34, 0.6)'),
             spanGaps: false,
         },
     ];
@@ -2490,9 +2573,7 @@ function renderTrendChart() {
                                 const idx = items[0]?.dataIndex;
                                 if (idx == null) return '';
                                 const e = entries[idx];
-                                const week = parseInt(e.week.slice(4));
-                                const year = e.week.slice(0, 4);
-                                return `Week ${week} (${year})`;
+                                return `Week ${parseInt(e.week.slice(4))} (${e.week.slice(0, 4)})`;
                             },
                         },
                     },
@@ -2681,6 +2762,26 @@ function initLoadButton() {
         } finally {
             btn.disabled = false;
             btn.textContent = 'Laden';
+            showProgress(false);
+        }
+    });
+
+    document.getElementById('btn-load-all').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-load-all');
+        const loadBtn = document.getElementById('btn-load');
+        btn.disabled = true;
+        loadBtn.disabled = true;
+        btn.textContent = 'Bezig...';
+
+        try {
+            await loadAllWeeks();
+        } catch (e) {
+            console.error('Load all failed:', e);
+            alert('Fout bij laden: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            loadBtn.disabled = false;
+            btn.textContent = 'Alle weken';
             showProgress(false);
         }
     });
