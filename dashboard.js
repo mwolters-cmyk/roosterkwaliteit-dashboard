@@ -27,8 +27,8 @@ const COLORS = {
     primaryBg: 'rgba(26, 82, 118, 0.15)',
     athena: 'rgba(41, 128, 185, 0.8)',
     athenaBg: 'rgba(41, 128, 185, 0.15)',
-    socrates: 'rgba(230, 126, 34, 0.8)',
-    socratesBg: 'rgba(230, 126, 34, 0.15)',
+    socrates: 'rgba(39, 174, 96, 0.8)',
+    socratesBg: 'rgba(39, 174, 96, 0.15)',
     green: 'rgba(39, 174, 96, 0.8)',
     greenBg: 'rgba(39, 174, 96, 0.15)',
     orange: 'rgba(230, 126, 34, 0.8)',
@@ -43,8 +43,10 @@ const COLORS = {
 const KEY_INDICATORS = {
     D1: { label: 'Lokaalwissel buiten pauze', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
     D2: { label: 'Tussenuren >2/week', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
+    D3: { label: 'Lokaalwissel in pauze', unit: '%', green: 10, orange: 30, higherIsBetter: false, category: 'docenten' },
     D4: { label: 'Pendel zonder reistijd', unit: '%', green: 0, orange: 25, higherIsBetter: false, category: 'docenten' },
     D5: { label: 'Late uren >1/week', unit: '%', green: 10, orange: 25, higherIsBetter: false, category: 'docenten' },
+    D6: { label: 'Vast lokaal', unit: '%', green: 80, orange: 50, higherIsBetter: true, category: 'docenten' },
     O1: { label: 'Klassen met tussenuren', unit: '%', green: 5, orange: 20, higherIsBetter: false, category: 'onderbouw' },
     O2: { label: 'Mentoruur aan rand', unit: '%', green: 90, orange: 70, higherIsBetter: true, category: 'onderbouw' },
     O3: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'onderbouw' },
@@ -74,11 +76,14 @@ let state = {
     // Computed metrics
     docentMetrics: null,
     leerlingMetrics: null,
-    achterafMetrics: null,
+    // Accumulated weekly data for averaging
+    weeklyTeachers: {},    // weekCode -> teachers array (for computing averages)
+    docentMetricsAvg: null, // averaged across all non-vacation weeks
     // Key indicators
     indicators: null,       // { D1: {value, score, status}, ... }
     subtotals: null,        // { docenten: N, onderbouw: N, ... }
     overallScore: null,     // 0-10
+    indicatorsByLocation: null,
     // UI state
     leerlingSubFilter: 'alle',  // 'alle', 'onderbouw', 'bovenbouw'
     // Charts
@@ -372,6 +377,9 @@ async function loadAllWeeks() {
         .map(o => o.value)
         .filter(w => w <= currentWeekCode);
 
+    // Reset accumulated data
+    state.weeklyTeachers = {};
+
     showProgress(true);
     for (let i = 0; i < allWeeks.length; i++) {
         updateProgress(i, allWeeks.length, `Week ${parseInt(allWeeks[i].slice(4))} (${i + 1}/${allWeeks.length})`);
@@ -382,9 +390,99 @@ async function loadAllWeeks() {
         }
     }
 
-    // Reload original week with rendering
+    // Compute week-averaged docent metrics (excluding vacation weeks)
+    computeAveragedDocentMetrics();
+
+    // Reload original week with rendering (uses averaged data)
     updateProgress(allWeeks.length, allWeeks.length, 'Klaar! Dashboard herladen...');
     await loadWeekData(originalWeek);
+}
+
+/**
+ * Compute averaged docent metrics across all loaded non-vacation weeks.
+ * Vacation weeks auto-detected: < 30% of median lesson count.
+ */
+function computeAveragedDocentMetrics() {
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const weekEntries = Object.values(stored).filter(e => e.totalLessons > 0);
+    if (weekEntries.length === 0) return;
+
+    // Detect vacation weeks: < 30% of median lessons
+    const lessonCounts = weekEntries.map(e => e.totalLessons).sort((a, b) => a - b);
+    const median = lessonCounts[Math.floor(lessonCounts.length / 2)];
+    const threshold = median * 0.3;
+    const vacationWeeks = new Set(weekEntries.filter(e => e.totalLessons < threshold).map(e => e.week));
+    console.log(`Vacation weeks detected (< ${Math.round(threshold)} lessons): ${[...vacationWeeks].map(w => 'W' + parseInt(w.slice(4))).join(', ')}`);
+
+    // Mark vacation weeks in localStorage
+    for (const [weekCode, entry] of Object.entries(stored)) {
+        entry.isVacation = vacationWeeks.has(weekCode);
+    }
+    localStorage.setItem('rooster_scores', JSON.stringify(stored));
+
+    // Get non-vacation weekly teacher data
+    const validWeeks = Object.entries(state.weeklyTeachers)
+        .filter(([wk]) => !vacationWeeks.has(wk));
+
+    if (validWeeks.length === 0) return;
+
+    // Aggregate per teacher across weeks
+    const teacherWeekData = {}; // code -> [{week data}]
+    for (const [, teachers] of validWeeks) {
+        for (const t of teachers) {
+            if (!teacherWeekData[t.code]) teacherWeekData[t.code] = [];
+            teacherWeekData[t.code].push(t);
+        }
+    }
+
+    // Compute averages
+    const avgTeachers = [];
+    for (const [code, weeks] of Object.entries(teacherWeekData)) {
+        const n = weeks.length;
+        const avg = {
+            code,
+            tussenuren: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, totaal: 0 },
+            lokaalRating: Math.round(weeks.reduce((s, w) => s + w.lokaalRating, 0) / n),
+            lokalen: new Set(),
+            wisselingenBuitenPauze: +(weeks.reduce((s, w) => s + w.wisselingenBuitenPauze, 0) / n).toFixed(1),
+            pendelt: weeks.some(w => w.pendelt),
+            pendelDagen: weeks.flatMap(w => w.pendelDagen),
+            lateUren: +(weeks.reduce((s, w) => s + w.lateUren, 0) / n).toFixed(1),
+            urenPerDag: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+            maxAaneengesloten: Math.max(...weeks.map(w => w.maxAaneengesloten)),
+            fairnessScore: +(weeks.reduce((s, w) => s + w.fairnessScore, 0) / n).toFixed(1),
+            locations: new Set(), // All locations this teacher taught at across weeks
+        };
+
+        for (const day of [1, 2, 3, 4, 5]) {
+            avg.tussenuren[day] = +(weeks.reduce((s, w) => s + w.tussenuren[day], 0) / n).toFixed(1);
+            avg.urenPerDag[day] = +(weeks.reduce((s, w) => s + w.urenPerDag[day], 0) / n).toFixed(1);
+        }
+        avg.tussenuren.totaal = +(weeks.reduce((s, w) => s + w.tussenuren.totaal, 0) / n).toFixed(1);
+
+        // Merge all lokalen and locations across weeks
+        for (const w of weeks) {
+            for (const loc of w.lokalen) avg.lokalen.add(loc);
+            if (w.locations) {
+                for (const loc of w.locations) avg.locations.add(loc);
+            }
+        }
+
+        avgTeachers.push(avg);
+    }
+
+    state.docentMetricsAvg = {
+        teachers: avgTeachers,
+        totalTeachers: avgTeachers.length,
+        avgTussenuren: avgTeachers.length > 0
+            ? (avgTeachers.reduce((s, t) => s + parseFloat(t.tussenuren.totaal), 0) / avgTeachers.length).toFixed(1) : 0,
+        pendelaars: avgTeachers.filter(t => t.pendelt),
+        avg8e9e: avgTeachers.length > 0
+            ? (avgTeachers.reduce((s, t) => s + parseFloat(t.lateUren), 0) / avgTeachers.length).toFixed(1) : 0,
+        weekCount: validWeeks.length,
+    };
+
+    console.log(`Averaged docent metrics: ${avgTeachers.length} teachers across ${validWeeks.length} non-vacation weeks`);
 }
 
 async function loadWeekData(weekCode, { silent = false } = {}) {
@@ -1308,12 +1406,14 @@ function computeIndicatorsForFilter(locationFilter) {
     // === DOCENTEN ===
     indicators.D1 = computeIndicator('D1', n > 0 ? teachers.filter(t => t.lokaalRating === 4).length / n * 100 : 0);
     indicators.D2 = computeIndicator('D2', n > 0 ? teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100 : 0);
+    indicators.D3 = computeIndicator('D3', n > 0 ? teachers.filter(t => t.lokaalRating === 3).length / n * 100 : 0);
 
     const pend = teachers.filter(t => t.pendelt);
     indicators.D4 = computeIndicator('D4', pend.length > 0
         ? pend.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pend.length * 100 : 0);
 
     indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
+    indicators.D6 = computeIndicator('D6', n > 0 ? teachers.filter(t => t.lokaalRating === 1).length / n * 100 : 0);
 
     // === ONDERBOUW ===
     const nk = klassen.length;
@@ -1359,8 +1459,16 @@ function saveWeekScore() {
     const weekCode = state.currentWeekCode || document.getElementById('week-select')?.value;
     if (!weekCode || !state.indicatorsByLocation) return;
 
+    // Count total non-cancelled lessons this week (for vacation detection)
+    let totalLessons = 0;
+    for (const [, appts] of Object.entries(state.teacherAppointments)) {
+        for (const a of appts) {
+            if (!a.cancelled && a.slot > 0 && a.type === 'lesson') totalLessons++;
+        }
+    }
+
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entry = { week: weekCode };
+    const entry = { week: weekCode, totalLessons };
     for (const loc of ['alle', 'Athena', 'Socrates']) {
         const d = state.indicatorsByLocation[loc];
         entry[loc] = {
@@ -1370,7 +1478,6 @@ function saveWeekScore() {
             onderbouw: d.subtotals.onderbouw ?? null,
             bovenbouw: d.subtotals.bovenbouw ?? null,
         };
-        // Save individual indicator values for trend charts
         const vals = {};
         for (const [key, ind] of Object.entries(d.indicators)) {
             vals[key] = ind.value;
@@ -1379,6 +1486,32 @@ function saveWeekScore() {
     }
     stored[weekCode] = entry;
     localStorage.setItem('rooster_scores', JSON.stringify(stored));
+
+    // Accumulate teacher data for week-averaging
+    if (state.docentMetrics && totalLessons > 0) {
+        state.weeklyTeachers[weekCode] = state.docentMetrics.teachers.map(t => {
+            // Collect teacher's locations this week
+            const appts = state.teacherAppointments[t.code] || [];
+            const locations = new Set();
+            for (const a of appts) {
+                for (const loc of a.locations) locations.add(loc);
+            }
+            return {
+                code: t.code,
+                tussenuren: { ...t.tussenuren },
+                lokaalRating: t.lokaalRating,
+                lokalen: new Set(t.lokalen),
+                wisselingenBuitenPauze: t.wisselingenBuitenPauze,
+                pendelt: t.pendelt,
+                pendelDagen: [...t.pendelDagen],
+                lateUren: t.lateUren,
+                urenPerDag: { ...t.urenPerDag },
+                maxAaneengesloten: t.maxAaneengesloten,
+                fairnessScore: t.fairnessScore,
+                locations: [...locations],
+            };
+        });
+    }
 }
 
 // ================================================================
@@ -1437,22 +1570,31 @@ function renderDocenten() {
     const m = state.docentMetrics;
     if (!m) return;
 
+    // Use averaged data when available (after loading all weeks)
+    const useAvg = state.docentMetricsAvg;
+    const sourceTeachers = useAvg ? useAvg.teachers : m.teachers;
+
     // Apply location filter
-    const teachers = filterByLocation(m.teachers, 'teacher');
+    const teachers = filterByLocation(sourceTeachers, 'teacher');
 
     // Indicator cards + trend
-    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D4', 'D5']);
+    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']);
     renderDocentTrendChart();
 
     // KPIs
     setText('kpi-doc-total', teachers.length);
     const avgT = teachers.length > 0
-        ? (teachers.reduce((s, t) => s + t.tussenuren.totaal, 0) / teachers.length).toFixed(1) : 0;
+        ? (teachers.reduce((s, t) => s + parseFloat(t.tussenuren.totaal), 0) / teachers.length).toFixed(1) : 0;
     setText('kpi-doc-tussenuren', avgT);
     setText('kpi-doc-pendelaars', teachers.filter(t => t.pendelt).length);
     const avg8 = teachers.length > 0
-        ? (teachers.reduce((s, t) => s + t.lateUren, 0) / teachers.length).toFixed(1) : 0;
+        ? (teachers.reduce((s, t) => s + parseFloat(t.lateUren), 0) / teachers.length).toFixed(1) : 0;
     setText('kpi-doc-late', avg8);
+
+    // Week count indicator
+    if (useAvg) {
+        setText('kpi-doc-weeks', `${useAvg.weekCount} weken`);
+    }
 
     // Management summary
     renderDocentSummary(teachers);
@@ -1465,9 +1607,6 @@ function renderDocenten() {
 
     // Pendelen
     renderDocentPendel(teachers);
-
-    // Spreiding & belasting
-    renderDocentSpreiding(teachers);
 }
 
 function filterByLocation(teachers, type) {
@@ -1475,7 +1614,13 @@ function filterByLocation(teachers, type) {
 
     if (type === 'teacher') {
         return teachers.filter(t => {
-            // Check if any of teacher's locations are at selected branch
+            // Averaged teachers have locations stored directly
+            if (t.locations instanceof Set) {
+                return [...t.locations].some(loc =>
+                    state.locationToBranch[loc] === state.activeFilter
+                );
+            }
+            // Single-week teachers: check appointments
             const appts = state.teacherAppointments[t.code] || [];
             return appts.some(a =>
                 a.locations.some(loc =>
@@ -1494,14 +1639,15 @@ function renderDocentSummary(teachers) {
         return;
     }
 
-    const worstTussenuren = [...teachers].sort((a, b) => b.tussenuren.totaal - a.tussenuren.totaal).slice(0, 3);
+    const worstTussenuren = [...teachers].sort((a, b) => parseFloat(b.tussenuren.totaal) - parseFloat(a.tussenuren.totaal)).slice(0, 3);
     const rating4Count = teachers.filter(t => t.lokaalRating === 4).length;
     const pendelCount = teachers.filter(t => t.pendelt).length;
 
-    let html = '<h3>Samenvatting Docenten</h3>';
+    const isAvg = !!state.docentMetricsAvg;
+    let html = `<h3>Samenvatting Docenten${isAvg ? ` (gemiddeld over ${state.docentMetricsAvg.weekCount} weken)` : ''}</h3>`;
     html += `<p>${teachers.length} docenten geanalyseerd. `;
 
-    const avgT = (teachers.reduce((s, t) => s + t.tussenuren.totaal, 0) / teachers.length).toFixed(1);
+    const avgT = (teachers.reduce((s, t) => s + parseFloat(t.tussenuren.totaal), 0) / teachers.length).toFixed(1);
     if (parseFloat(avgT) <= 1) {
         html += `Gemiddeld <span class="good">${avgT}</span> tussenuren per week. `;
     } else if (parseFloat(avgT) <= 3) {
@@ -1510,10 +1656,11 @@ function renderDocentSummary(teachers) {
         html += `Gemiddeld <span class="bad">${avgT}</span> tussenuren per week. `;
     }
 
-    if (worstTussenuren[0]?.tussenuren.totaal > 0) {
-        html += `Meeste tussenuren: ${worstTussenuren.map(t =>
-            `<strong>${t.code}</strong> (${t.tussenuren.totaal})`
-        ).join(', ')}. `;
+    if (parseFloat(worstTussenuren[0]?.tussenuren.totaal) > 0) {
+        html += `Meeste tussenuren: ${worstTussenuren.map(t => {
+            const v = parseFloat(t.tussenuren.totaal);
+            return `<strong>${t.code}</strong> (${Number.isInteger(v) ? v : v.toFixed(1)})`;
+        }).join(', ')}. `;
     }
 
     if (rating4Count > 0) {
@@ -1528,24 +1675,25 @@ function renderDocentSummary(teachers) {
 
 function renderDocentTussenuren(teachers) {
     const tbody = document.querySelector('#doc-tussenuren-table tbody');
-    const sorted = [...teachers].sort((a, b) => b.tussenuren.totaal - a.tussenuren.totaal);
+    const sorted = [...teachers].sort((a, b) => parseFloat(b.tussenuren.totaal) - parseFloat(a.tussenuren.totaal));
 
     tbody.innerHTML = sorted.map(t => {
         const cells = [1, 2, 3, 4, 5].map(d => {
-            const v = t.tussenuren[d];
-            const cls = v === 0 ? 'good' : v === 1 ? 'warn' : 'bad';
-            return `<td class="num"><span class="badge ${cls}">${v}</span></td>`;
+            const v = parseFloat(t.tussenuren[d]);
+            const cls = v === 0 ? 'good' : v <= 1 ? 'warn' : 'bad';
+            return `<td class="num"><span class="badge ${cls}">${Number.isInteger(v) ? v : v.toFixed(1)}</span></td>`;
         }).join('');
-        const totCls = t.tussenuren.totaal === 0 ? 'good' : t.tussenuren.totaal <= 2 ? 'warn' : 'bad';
+        const tot = parseFloat(t.tussenuren.totaal);
+        const totCls = tot === 0 ? 'good' : tot <= 2 ? 'warn' : 'bad';
         return `<tr>
             <td>${t.code}</td>
             ${cells}
-            <td class="num"><strong><span class="badge ${totCls}">${t.tussenuren.totaal}</span></strong></td>
+            <td class="num"><strong><span class="badge ${totCls}">${Number.isInteger(tot) ? tot : tot.toFixed(1)}</span></strong></td>
         </tr>`;
     }).join('');
 
     // Bar chart: top 10
-    const top10 = sorted.filter(t => t.tussenuren.totaal > 0).slice(0, 10);
+    const top10 = sorted.filter(t => parseFloat(t.tussenuren.totaal) > 0).slice(0, 10);
     state.charts.docTussenuren = new Chart(
         document.getElementById('chart-doc-tussenuren'), {
             type: 'bar',
@@ -1553,7 +1701,7 @@ function renderDocentTussenuren(teachers) {
                 labels: top10.map(t => t.code),
                 datasets: [{
                     label: 'Tussenuren',
-                    data: top10.map(t => t.tussenuren.totaal),
+                    data: top10.map(t => parseFloat(t.tussenuren.totaal)),
                     backgroundColor: COLORS.red,
                 }],
             },
@@ -1580,14 +1728,18 @@ function renderDocentLokaal(teachers) {
     const tbody = document.querySelector('#doc-lokaal-table tbody');
     const sorted = [...teachers].sort((a, b) => b.lokaalRating - a.lokaalRating || b.wisselingenBuitenPauze - a.wisselingenBuitenPauze);
 
-    tbody.innerHTML = sorted.map(t => `<tr>
-        <td>${t.code}</td>
-        <td><span class="badge rating-${t.lokaalRating}">${ratingLabels[t.lokaalRating]}</span></td>
-        <td class="num">${t.lokalen.size}</td>
-        <td class="num">${t.wisselingenBuitenPauze > 0
-            ? `<span class="badge bad">${t.wisselingenBuitenPauze}</span>`
-            : '<span class="badge good">0</span>'}</td>
-    </tr>`).join('');
+    tbody.innerHTML = sorted.map(t => {
+        const wbp = parseFloat(t.wisselingenBuitenPauze);
+        const wbpDisplay = Number.isInteger(wbp) ? wbp : wbp.toFixed(1);
+        return `<tr>
+            <td>${t.code}</td>
+            <td><span class="badge rating-${t.lokaalRating}">${ratingLabels[t.lokaalRating]}</span></td>
+            <td class="num">${t.lokalen.size}</td>
+            <td class="num">${wbp > 0
+                ? `<span class="badge bad">${wbpDisplay}</span>`
+                : '<span class="badge good">0</span>'}</td>
+        </tr>`;
+    }).join('');
 
     // Donut chart: rating distribution
     const counts = [0, 0, 0, 0];
@@ -1625,7 +1777,12 @@ function renderDocentPendel(teachers) {
 
     const rows = [];
     for (const t of pendelaars) {
+        // Deduplicate pendelDagen by day+locaties (for averaged data across weeks)
+        const seen = new Set();
         for (const pd of t.pendelDagen) {
+            const key = `${pd.day}-${pd.locaties}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
             rows.push(`<tr>
                 <td>${t.code}</td>
                 <td>${DAYS_LABELS[pd.day - 1]}</td>
@@ -1637,37 +1794,6 @@ function renderDocentPendel(teachers) {
         }
     }
     tbody.innerHTML = rows.join('');
-}
-
-function renderDocentSpreiding(teachers) {
-    // Heatmap: teachers x days, cell = number of lessons
-    const container = document.getElementById('doc-heatmap');
-    const sorted = [...teachers].sort((a, b) => a.code.localeCompare(b.code));
-
-    let maxVal = 0;
-    for (const t of sorted) {
-        for (const d of [1, 2, 3, 4, 5]) {
-            if (t.urenPerDag[d] > maxVal) maxVal = t.urenPerDag[d];
-        }
-    }
-
-    let html = '<table class="heatmap-table"><thead><tr><th>Docent</th>';
-    for (const d of DAYS_LABELS) html += `<th>${d}</th>`;
-    html += '</tr></thead><tbody>';
-
-    for (const t of sorted) {
-        html += `<tr><td>${t.code}</td>`;
-        for (const d of [1, 2, 3, 4, 5]) {
-            const val = t.urenPerDag[d];
-            const intensity = maxVal ? val / maxVal : 0;
-            const bg = heatColor(intensity);
-            const textColor = intensity > 0.6 ? 'white' : '#333';
-            html += `<td style="background:${bg};color:${textColor}">${val}</td>`;
-        }
-        html += '</tr>';
-    }
-    html += '</tbody></table>';
-    container.innerHTML = html;
 }
 
 // ================================================================
@@ -2423,7 +2549,9 @@ function renderTrendChart() {
     if (!section) return;
 
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = Object.values(stored).sort((a, b) => a.week.localeCompare(b.week));
+    const entries = Object.values(stored)
+        .filter(e => !e.isVacation)  // Skip vacation weeks
+        .sort((a, b) => a.week.localeCompare(b.week));
 
     if (entries.length < 1) {
         section.classList.add('hidden');
@@ -2432,7 +2560,7 @@ function renderTrendChart() {
     section.classList.remove('hidden');
 
     const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
-    const currentWeek = document.getElementById('week-select')?.value;
+    const currentWeek = state.currentWeekCode;
 
     // Per-locatie lijnen met uitsplitsing docenten/leerlingen
     const mkLine = (label, getter, color, width, dashed) => ({
@@ -2449,10 +2577,10 @@ function renderTrendChart() {
 
     const datasets = [
         mkLine('SGL Overall', e => e.alle?.overall ?? e.overall ?? null, 'rgba(26, 82, 118, 0.9)', 3, false),
-        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(26, 82, 118, 0.5)', 1.5, true),
-        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(26, 82, 118, 0.5)', 1.5, [2, 2]),
+        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(52, 73, 94, 0.7)', 1.5, true),
+        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(52, 73, 94, 0.7)', 1.5, [2, 2]),
         mkLine('Athena', e => e.Athena?.overall ?? null, 'rgba(41, 128, 185, 0.9)', 2, false),
-        mkLine('Socrates', e => e.Socrates?.overall ?? null, 'rgba(230, 126, 34, 0.9)', 2, false),
+        mkLine('Socrates', e => e.Socrates?.overall ?? null, 'rgba(39, 174, 96, 0.9)', 2, false),
     ];
 
     if (state.charts.trend) state.charts.trend.destroy();
@@ -2495,7 +2623,9 @@ function renderDocentTrendChart() {
     if (!section) return;
 
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = Object.values(stored).sort((a, b) => a.week.localeCompare(b.week));
+    const entries = Object.values(stored)
+        .filter(e => !e.isVacation)  // Skip vacation weeks
+        .sort((a, b) => a.week.localeCompare(b.week));
 
     if (entries.length < 2) {
         section.classList.add('hidden');
@@ -2507,10 +2637,12 @@ function renderDocentTrendChart() {
     const locKey = state.activeFilter === 'alle' ? 'alle' : state.activeFilter;
 
     const kpiDefs = [
-        { key: 'D1', label: 'Lokaalwissel buiten pauze (%)', color: 'rgba(231, 76, 60, 0.8)' },
-        { key: 'D2', label: 'Tussenuren >2/week (%)', color: 'rgba(230, 126, 34, 0.8)' },
-        { key: 'D4', label: 'Pendel zonder reistijd (%)', color: 'rgba(155, 89, 182, 0.8)' },
-        { key: 'D5', label: 'Late uren >1/week (%)', color: 'rgba(41, 128, 185, 0.8)' },
+        { key: 'D1', label: 'Lokaalwissel buiten pauze (%)', color: 'rgba(231, 76, 60, 0.85)' },
+        { key: 'D2', label: 'Tussenuren >2/week (%)', color: 'rgba(230, 126, 34, 0.85)' },
+        { key: 'D3', label: 'Lokaalwissel in pauze (%)', color: 'rgba(243, 156, 18, 0.85)' },
+        { key: 'D4', label: 'Pendel zonder reistijd (%)', color: 'rgba(155, 89, 182, 0.85)' },
+        { key: 'D5', label: 'Late uren >1/week (%)', color: 'rgba(41, 128, 185, 0.85)' },
+        { key: 'D6', label: 'Vast lokaal (%)', color: 'rgba(39, 174, 96, 0.85)' },
     ];
 
     const datasets = kpiDefs.map(def => ({
