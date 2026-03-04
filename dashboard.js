@@ -447,8 +447,9 @@ function computeAveragedDocentMetrics() {
             lokalen: new Set(),
             wisselingenBuitenPauze: +(weeks.reduce((s, w) => s + w.wisselingenBuitenPauze, 0) / n).toFixed(1),
             pendelt: weeks.some(w => w.pendelt),
-            pendelDagen: deduplicatePendelDagen(weeks.flatMap(w => w.pendelDagen)),
-            pendelDagenPerWeek: +(weeks.reduce((s, w) => s + w.pendelDagen.length, 0) / n).toFixed(1),
+            pendelBewegingen: deduplicatePendelBewegingen(weeks.flatMap(w => w.pendelBewegingen || [])),
+            totalPendelBewegingen: +(weeks.reduce((s, w) => s + (w.totalPendelBewegingen || 0), 0) / n).toFixed(1),
+            pendelZonderReistijd: +(weeks.reduce((s, w) => s + (w.pendelZonderReistijd || 0), 0) / n).toFixed(1),
             lateUren: +(weeks.reduce((s, w) => s + w.lateUren, 0) / n).toFixed(1),
             urenPerDag: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
             maxAaneengesloten: Math.max(...weeks.map(w => w.maxAaneengesloten)),
@@ -582,7 +583,9 @@ function computeDocentMetrics() {
             lokalen: new Set(),
             wisselingenBuitenPauze: 0,
             pendelt: false,
-            pendelDagen: [],
+            pendelBewegingen: [],        // [{day, from, to, metReistijd}]
+            totalPendelBewegingen: 0,
+            pendelZonderReistijd: 0,
             lateUren: 0,           // 8e + 9e uren
             urenPerDag: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
             maxAaneengesloten: 0,
@@ -623,26 +626,55 @@ function computeDocentMetrics() {
             const realSlots = uniqueSlots.filter(s => !wnaSlots.has(s));
             teacher.urenPerDag[day] = realSlots.length;
 
-            // Pendel-check: teaches at both locations on same day (must be before tussenuren)
-            const dayBranches = new Set();
-            for (const a of dayLessons) {
-                for (const loc of a.locations) {
-                    const branch = state.locationToBranch[loc];
-                    if (branch) dayBranches.add(branch);
+            // Pendel-detectie: bouw blokken per branch, detecteer bewegingen
+            // Excludeer WNA uit pendel-analyse
+            const realForPendel = dayLessons.filter(a => !wnaSlots.has(a.slot));
+            const withBranch = realForPendel
+                .sort((a, b) => a.slot - b.slot)
+                .map(a => ({
+                    slot: a.slot,
+                    branch: state.locationToBranch[a.locations[0]] || 'Onbekend',
+                }));
+
+            // Bouw blokken: opeenvolgende lessen aan dezelfde branch
+            const blocks = [];
+            if (withBranch.length > 0) {
+                let blk = { branch: withBranch[0].branch, slots: [withBranch[0].slot] };
+                for (let i = 1; i < withBranch.length; i++) {
+                    if (withBranch[i].branch === blk.branch) {
+                        blk.slots.push(withBranch[i].slot);
+                    } else {
+                        blocks.push(blk);
+                        blk = { branch: withBranch[i].branch, slots: [withBranch[i].slot] };
+                    }
                 }
+                blocks.push(blk);
             }
+
+            // Detecteer pendelbewegingen (branch-overgangen)
             let pendelGapSlots = new Set();
-            if (dayBranches.size > 1) {
+            for (let bi = 1; bi < blocks.length; bi++) {
+                if (blocks[bi].branch === blocks[bi - 1].branch) continue;
+                const lastSlot = blocks[bi - 1].slots[blocks[bi - 1].slots.length - 1];
+                const firstSlot = blocks[bi].slots[0];
+                const gap = firstSlot - lastSlot;
+                const metReistijd = gap >= 2; // minimaal 1 vrij uur voor reistijd
+
                 teacher.pendelt = true;
-                const reistijdOk = checkReistijd(dayLessons, state.locationToBranch);
-                teacher.pendelDagen.push({
+                teacher.pendelBewegingen.push({
                     day,
-                    locaties: [...dayBranches].sort().join(' + '),
-                    reistijdOk,
+                    from: blocks[bi - 1].branch,
+                    to: blocks[bi].branch,
+                    metReistijd,
                 });
-                // Identify pendel gap slots: the free slots between locations used for travel
-                if (reistijdOk) {
-                    pendelGapSlots = findPendelGapSlots(dayLessons, state.locationToBranch);
+                teacher.totalPendelBewegingen++;
+                if (!metReistijd) teacher.pendelZonderReistijd++;
+
+                // Verzamel vrije slots als reistijd-gap (voor tussenuur-exclusie)
+                if (metReistijd) {
+                    for (let s = lastSlot + 1; s < firstSlot; s++) {
+                        pendelGapSlots.add(s);
+                    }
                 }
             }
 
@@ -745,6 +777,8 @@ function computeDocentMetrics() {
         ? (metrics.teachers.reduce((s, t) => s + t.tussenuren.totaal, 0) / metrics.totalTeachers).toFixed(1)
         : 0;
     metrics.pendelaars = metrics.teachers.filter(t => t.pendelt);
+    metrics.totalPendelBewegingen = metrics.teachers.reduce((s, t) => s + t.totalPendelBewegingen, 0);
+    metrics.pendelZonderReistijd = metrics.teachers.reduce((s, t) => s + t.pendelZonderReistijd, 0);
     metrics.avg8e9e = metrics.totalTeachers > 0
         ? (metrics.teachers.reduce((s, t) => s + t.lateUren, 0) / metrics.totalTeachers).toFixed(1)
         : 0;
@@ -752,87 +786,8 @@ function computeDocentMetrics() {
     return metrics;
 }
 
-/**
- * Check of er voldoende reistijd is bij pendelen.
- * Er moet minimaal 2 opeenvolgende vrije slots zijn (1 les + 1 pauze)
- * tussen de laatste les op locatie A en de eerste les op locatie B.
- */
-function checkReistijd(dayLessons, locationToBranch) {
-    // Group lessons by branch
-    const byBranch = {};
-    for (const a of dayLessons) {
-        const branch = locationToBranch[a.locations[0]] || 'Onbekend';
-        if (!byBranch[branch]) byBranch[branch] = [];
-        byBranch[branch].push(a.slot);
-    }
-
-    const branchNames = Object.keys(byBranch);
-    if (branchNames.length < 2) return true;
-
-    // For each pair of branches, check gap
-    for (let i = 0; i < branchNames.length; i++) {
-        for (let j = i + 1; j < branchNames.length; j++) {
-            const slotsA = byBranch[branchNames[i]].sort((a, b) => a - b);
-            const slotsB = byBranch[branchNames[j]].sort((a, b) => a - b);
-            // Check if A finishes before B starts (or vice versa)
-            const lastA = slotsA[slotsA.length - 1];
-            const firstB = slotsB[0];
-            const lastB = slotsB[slotsB.length - 1];
-            const firstA = slotsA[0];
-
-            // Gap must be >= 2 (1 lesuur + 1 pauze)
-            const gap1 = firstB - lastA;
-            const gap2 = firstA - lastB;
-            const gap = Math.max(gap1, gap2);
-            if (gap < 2) return false;
-        }
-    }
-    return true;
-}
-
-/**
- * Find the gap slots used for pendel travel between branches.
- * Returns a Set of slot numbers that are "travel time" between locations.
- */
-function findPendelGapSlots(dayLessons, locationToBranch) {
-    const byBranch = {};
-    for (const a of dayLessons) {
-        const branch = locationToBranch[a.locations[0]] || 'Onbekend';
-        if (!byBranch[branch]) byBranch[branch] = [];
-        byBranch[branch].push(a.slot);
-    }
-
-    const branchNames = Object.keys(byBranch);
-    const gapSlots = new Set();
-    if (branchNames.length < 2) return gapSlots;
-
-    for (let i = 0; i < branchNames.length; i++) {
-        for (let j = i + 1; j < branchNames.length; j++) {
-            const slotsA = byBranch[branchNames[i]].sort((a, b) => a - b);
-            const slotsB = byBranch[branchNames[j]].sort((a, b) => a - b);
-            const lastA = slotsA[slotsA.length - 1];
-            const firstB = slotsB[0];
-            const lastB = slotsB[slotsB.length - 1];
-            const firstA = slotsA[0];
-
-            // Determine which direction: A→B or B→A
-            let gapStart, gapEnd;
-            if (firstB > lastA) {
-                gapStart = lastA + 1;
-                gapEnd = firstB;
-            } else if (firstA > lastB) {
-                gapStart = lastB + 1;
-                gapEnd = firstA;
-            }
-            if (gapStart != null) {
-                for (let s = gapStart; s < gapEnd; s++) {
-                    gapSlots.add(s);
-                }
-            }
-        }
-    }
-    return gapSlots;
-}
+// checkReistijd en findPendelGapSlots verwijderd — vervangen door
+// blok-gebaseerde pendel-bewegingsdetectie in computeDocentMetrics
 
 // ================================================================
 // METRIC CALCULATIONS — LEERLINGEN
@@ -1413,16 +1368,16 @@ function computeIndicatorsForFilter(locationFilter) {
     indicators.D2 = computeIndicator('D2', n > 0 ? teachers.filter(t => t.tussenuren.totaal > 2).length / n * 100 : 0);
     indicators.D3 = computeIndicator('D3', n > 0 ? teachers.filter(t => t.lokaalRating === 3).length / n * 100 : 0);
 
-    const pend = teachers.filter(t => t.pendelt);
-    indicators.D4 = computeIndicator('D4', pend.length > 0
-        ? pend.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pend.length * 100 : 0);
+    // D4: % pendelbewegingen zonder reistijd
+    const totalMv = teachers.reduce((s, t) => s + (parseFloat(t.totalPendelBewegingen) || 0), 0);
+    const zonderRT = teachers.reduce((s, t) => s + (parseFloat(t.pendelZonderReistijd) || 0), 0);
+    indicators.D4 = computeIndicator('D4', totalMv > 0 ? zonderRT / totalMv * 100 : 0);
 
     indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
     indicators.D6 = computeIndicator('D6', n > 0 ? teachers.filter(t => t.lokaalRating === 1).length / n * 100 : 0);
 
-    // D7: totaal pendelmomenten per week (elke dag dat iemand pendelt telt als 1)
-    const totalPendelMomenten = teachers.reduce((s, t) => s + t.pendelDagen.length, 0);
-    indicators.D7 = computeIndicator('D7', totalPendelMomenten);
+    // D7: totaal pendelbewegingen per week
+    indicators.D7 = computeIndicator('D7', totalMv);
 
     // === ONDERBOUW ===
     const nk = klassen.length;
@@ -1512,7 +1467,9 @@ function saveWeekScore() {
                 lokalen: new Set(t.lokalen),
                 wisselingenBuitenPauze: t.wisselingenBuitenPauze,
                 pendelt: t.pendelt,
-                pendelDagen: [...t.pendelDagen],
+                pendelBewegingen: [...t.pendelBewegingen],
+                totalPendelBewegingen: t.totalPendelBewegingen,
+                pendelZonderReistijd: t.pendelZonderReistijd,
                 lateUren: t.lateUren,
                 urenPerDag: { ...t.urenPerDag },
                 maxAaneengesloten: t.maxAaneengesloten,
@@ -1763,13 +1720,13 @@ function renderDocentPendel(teachers) {
 
     const rows = [];
     for (const t of pendelaars) {
-        for (const pd of t.pendelDagen) {
+        for (const mv of t.pendelBewegingen) {
             rows.push(`<tr>
                 <td>${t.code}</td>
-                <td>${DAYS_LABELS[pd.day - 1]}</td>
-                <td>${pd.locaties}</td>
-                <td class="${pd.reistijdOk ? 'status-ok' : 'status-problem'}">
-                    ${pd.reistijdOk ? 'Ja' : 'Nee'}
+                <td>${DAYS_LABELS[mv.day - 1]}</td>
+                <td>${mv.from} → ${mv.to}</td>
+                <td class="${mv.metReistijd ? 'status-ok' : 'status-problem'}">
+                    ${mv.metReistijd ? 'Ja' : 'Nee'}
                 </td>
             </tr>`);
         }
@@ -2508,16 +2465,41 @@ function renderIndicatorCards(containerId, indicatorKeys) {
     const container = document.getElementById(containerId);
     if (!container || !state.indicatorsByLocation) return;
 
-    const locData = state.indicatorsByLocation[state.activeFilter] || state.indicatorsByLocation.alle;
-    let html = '';
-    for (const key of indicatorKeys) {
-        const ind = locData.indicators[key];
-        if (!ind) continue;
-        const def = KEY_INDICATORS[key];
-        const displayVal = def.unit === '%' ? ind.value + '%' : ind.value;
+    // Compute averaged indicator values from localStorage (all non-vacation weeks)
+    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = filterVacationWeeks(Object.values(stored));
+    const locKey = state.activeFilter === 'alle' ? 'alle' : state.activeFilter;
 
-        html += `<div class="indicator-card ${ind.status}">
-            <div class="indicator-dot ${ind.status}"></div>
+    const useAvg = entries.length >= 2;
+    let html = '';
+
+    if (useAvg) {
+        html += `<div class="indicator-header">Samenvatting KPI's (gemiddeld over ${entries.length} weken)</div>`;
+    }
+
+    for (const key of indicatorKeys) {
+        let value, status;
+        if (useAvg) {
+            // Average value across all non-vacation weeks
+            const vals = entries.map(e => e[locKey]?.indicatorValues?.[key]).filter(v => v != null);
+            if (vals.length === 0) continue;
+            value = +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1);
+            const ind = computeIndicator(key, value);
+            status = ind.status;
+        } else {
+            // Fallback: current week
+            const locData = state.indicatorsByLocation[state.activeFilter] || state.indicatorsByLocation.alle;
+            const ind = locData.indicators[key];
+            if (!ind) continue;
+            value = ind.value;
+            status = ind.status;
+        }
+
+        const def = KEY_INDICATORS[key];
+        const displayVal = def.unit === '%' ? value + '%' : value;
+
+        html += `<div class="indicator-card ${status}">
+            <div class="indicator-dot ${status}"></div>
             <div class="indicator-value">${displayVal}</div>
             <div class="indicator-label">${def.label}</div>
         </div>`;
@@ -2555,9 +2537,9 @@ function renderTrendChart() {
     });
 
     const datasets = [
-        mkLine('SGL Overall', e => e.alle?.overall ?? e.overall ?? null, 'rgba(26, 82, 118, 0.9)', 3, false),
-        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(52, 73, 94, 0.7)', 1.5, true),
-        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(52, 73, 94, 0.7)', 1.5, [2, 2]),
+        mkLine('SGL Overall', e => e.alle?.overall ?? e.overall ?? null, 'rgba(26, 82, 118, 0.95)', 3, false),
+        mkLine('SGL Docenten', e => e.alle?.docenten ?? null, 'rgba(155, 89, 182, 0.7)', 1.5, true),
+        mkLine('SGL Leerlingen', e => e.alle?.leerlingen ?? null, 'rgba(230, 126, 34, 0.7)', 1.5, [2, 2]),
         mkLine('Athena', e => e.Athena?.overall ?? null, 'rgba(41, 128, 185, 0.9)', 2, false),
         mkLine('Socrates', e => e.Socrates?.overall ?? null, 'rgba(39, 174, 96, 0.9)', 2, false),
     ];
@@ -2572,7 +2554,8 @@ function renderTrendChart() {
                 maintainAspectRatio: false,
                 scales: {
                     y: {
-                        min: 0, max: 10,
+                        min: 0,
+                        suggestedMax: 10,
                         title: { display: true, text: 'Rapportcijfer' },
                         ticks: { stepSize: 1 },
                     },
@@ -2659,18 +2642,17 @@ function renderDocentTrendChart() {
 // ================================================================
 
 /**
- * Deduplicate pendelDagen by day+locaties, keeping worst reistijdOk.
+ * Deduplicate pendel movements by day+from+to, keeping worst metReistijd.
  */
-function deduplicatePendelDagen(dagen) {
+function deduplicatePendelBewegingen(bewegingen) {
     const map = new Map();
-    for (const pd of dagen) {
-        const key = `${pd.day}-${pd.locaties}`;
+    for (const mv of bewegingen) {
+        const key = `${mv.day}-${mv.from}-${mv.to}`;
         const existing = map.get(key);
         if (!existing) {
-            map.set(key, { ...pd });
+            map.set(key, { ...mv });
         } else {
-            // Keep worst case: if any occurrence has reistijdOk=false, mark as false
-            if (!pd.reistijdOk) existing.reistijdOk = false;
+            if (!mv.metReistijd) existing.metReistijd = false;
         }
     }
     return [...map.values()];

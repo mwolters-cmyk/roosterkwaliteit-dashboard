@@ -541,6 +541,14 @@ footer {
 .dot-red { background: var(--accent-red); }
 
 /* ===== Indicator Cards (stoplicht) ===== */
+.indicator-header {
+    grid-column: 1 / -1;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
 .indicator-section {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
