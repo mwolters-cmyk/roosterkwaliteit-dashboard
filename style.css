@@ -552,6 +552,17 @@ footer {
     color: var(--text-light);
     margin-top: 0.3rem;
 }
+.score-breakdown {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 0.25rem;
+}
+.score-line {
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
 
 /* ===== Docenten Metric Table Coloring ===== */
 .metric-good { background: rgba(39, 174, 96, 0.12); }

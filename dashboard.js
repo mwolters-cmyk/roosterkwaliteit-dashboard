@@ -1591,10 +1591,9 @@ function renderDashboard() {
     const locFilter = document.getElementById('location-filter');
     if (locFilter) locFilter.style.display = 'none';
 
-    // Score-kaarten + trendgrafiek (altijd zichtbaar)
+    // Score-kaarten (altijd zichtbaar boven tabs)
     if (state.docentScoresByLocation) {
-        renderDocentScoreCards();
-        renderTrendChart();
+        renderScoreCards();
     }
 
     switch (state.activeTab) {
@@ -1622,7 +1621,7 @@ function renderDocenten() {
     renderDocentMetricTrend();
 }
 
-function renderDocentScoreCards() {
+function renderScoreCards() {
     const container = document.getElementById('doc-score-cards');
     if (!container) return;
     container.classList.remove('hidden');
@@ -1630,23 +1629,35 @@ function renderDocentScoreCards() {
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
     const entries = filterVacationWeeks(Object.values(stored));
     const useAvg = entries.length >= 2;
+    const subLabel = useAvg ? `gem. ${entries.length} weken` : 'huidige week';
+
+    const getScore = (loc, key, fallback) => {
+        if (useAvg) {
+            const vals = entries.map(e => e[loc]?.[key]).filter(v => v != null);
+            return vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
+        }
+        return fallback;
+    };
+
+    const fmt = (v) => v != null ? (v >= 0 ? '+' + v : '' + v) : '-';
 
     let html = '';
     for (const loc of ['alle', 'Athena', 'Socrates']) {
         const label = loc === 'alle' ? 'SGL' : loc;
-        let score;
-        if (useAvg) {
-            const vals = entries.map(e => e[loc]?.docentScore).filter(v => v != null);
-            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
-        } else {
-            score = state.docentScoresByLocation[loc]?.score ?? null;
-        }
-        const displayScore = score != null ? (score >= 0 ? '+' + score : score) : '-';
         const c = locColor(loc);
+
+        const docScore = getScore(loc, 'docentScore', state.docentScoresByLocation?.[loc]?.score);
+        const obScore = getScore(loc, 'onderbouwScore', state.leerlingScoresByLocation?.[loc]?.onderbouw?.score);
+        const bvScore = getScore(loc, 'bovenbouwScore', state.leerlingScoresByLocation?.[loc]?.bovenbouw?.score);
+
         html += `<div class="doc-score-card">
             <div class="doc-score-label">${label}</div>
-            <div class="doc-score-number" style="color:${c.text}">${displayScore}</div>
-            <div class="doc-score-sub">${useAvg ? `gem. ${entries.length} weken` : 'huidige week'}</div>
+            <div class="doc-score-number" style="color:${c.text}">${fmt(docScore)}</div>
+            <div class="score-breakdown">
+                <span class="score-line" style="color:${locColor(loc, 'onderbouw').text}">OB ${fmt(obScore)}</span>
+                <span class="score-line" style="color:${locColor(loc, 'bovenbouw').text}">BV ${fmt(bvScore)}</span>
+            </div>
+            <div class="doc-score-sub">${subLabel}</div>
         </div>`;
     }
     container.innerHTML = html;
@@ -2248,70 +2259,6 @@ function renderAchterafDocent(m) {
     }).join('');
 }
 
-function renderTrendChart() {
-    const section = document.getElementById('trend-section');
-    if (!section) return;
-
-    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = filterVacationWeeks(Object.values(stored));
-
-    if (entries.length < 1) {
-        section.classList.add('hidden');
-        return;
-    }
-    section.classList.remove('hidden');
-
-    const labels = entries.map(e => `W${parseInt(e.week.slice(4))}`);
-    const currentWeek = state.currentWeekCode;
-
-    const mkLine = (label, getter, color, width, dashed) => ({
-        label,
-        data: entries.map(getter),
-        borderColor: color,
-        backgroundColor: color.replace('0.9', '0.1'),
-        borderWidth: width,
-        borderDash: dashed ? [5, 3] : [],
-        tension: 0.3,
-        pointRadius: entries.map(e => e.week === currentWeek ? (width > 2 ? 7 : 5) : 2),
-        spanGaps: false,
-    });
-
-    const datasets = [
-        mkLine('SGL Docenten', e => e.alle?.docentScore ?? null, LOC_COLORS.sgl.line, 3, false),
-        mkLine('Athena Docenten', e => e.Athena?.docentScore ?? null, LOC_COLORS.athena.line, 2, false),
-        mkLine('Socrates Docenten', e => e.Socrates?.docentScore ?? null, LOC_COLORS.socrates.line, 2, false),
-    ];
-
-    if (state.charts.trend) state.charts.trend.destroy();
-    state.charts.trend = new Chart(
-        document.getElementById('chart-trend'), {
-            type: 'line',
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        title: { display: true, text: 'Gewogen score' },
-                    },
-                },
-                plugins: {
-                    legend: { display: true, position: 'top' },
-                    tooltip: {
-                        callbacks: {
-                            title: (items) => {
-                                const idx = items[0]?.dataIndex;
-                                if (idx == null) return '';
-                                const e = entries[idx];
-                                return `Week ${parseInt(e.week.slice(4))} (${e.week.slice(0, 4)})`;
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    );
-}
 
 // ================================================================
 // HELPER FUNCTIONS
