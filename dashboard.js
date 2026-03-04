@@ -47,6 +47,7 @@ const KEY_INDICATORS = {
     D4: { label: 'Pendel zonder reistijd', unit: '%', green: 0, orange: 25, higherIsBetter: false, category: 'docenten' },
     D5: { label: 'Late uren >1/week', unit: '%', green: 10, orange: 25, higherIsBetter: false, category: 'docenten' },
     D6: { label: 'Vast lokaal', unit: '%', green: 80, orange: 50, higherIsBetter: true, category: 'docenten' },
+    D7: { label: 'Pendelmomenten/week', unit: '', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
     O1: { label: 'Klassen met tussenuren', unit: '%', green: 5, orange: 20, higherIsBetter: false, category: 'onderbouw' },
     O2: { label: 'Mentoruur aan rand', unit: '%', green: 90, orange: 70, higherIsBetter: true, category: 'onderbouw' },
     O3: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'onderbouw' },
@@ -446,7 +447,8 @@ function computeAveragedDocentMetrics() {
             lokalen: new Set(),
             wisselingenBuitenPauze: +(weeks.reduce((s, w) => s + w.wisselingenBuitenPauze, 0) / n).toFixed(1),
             pendelt: weeks.some(w => w.pendelt),
-            pendelDagen: weeks.flatMap(w => w.pendelDagen),
+            pendelDagen: deduplicatePendelDagen(weeks.flatMap(w => w.pendelDagen)),
+            pendelDagenPerWeek: +(weeks.reduce((s, w) => s + w.pendelDagen.length, 0) / n).toFixed(1),
             lateUren: +(weeks.reduce((s, w) => s + w.lateUren, 0) / n).toFixed(1),
             urenPerDag: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
             maxAaneengesloten: Math.max(...weeks.map(w => w.maxAaneengesloten)),
@@ -460,9 +462,12 @@ function computeAveragedDocentMetrics() {
         }
         avg.tussenuren.totaal = +(weeks.reduce((s, w) => s + w.tussenuren.totaal, 0) / n).toFixed(1);
 
-        // Merge all lokalen and locations across weeks
+        // Average lokalen count (not union — union inflates the number)
+        const avgLokalenCount = Math.round(weeks.reduce((s, w) => s + w.lokalen.size, 0) / n);
+        avg.lokalen = { size: avgLokalenCount }; // set-like for table rendering
+
+        // Merge all locations across weeks (for location filtering)
         for (const w of weeks) {
-            for (const loc of w.lokalen) avg.lokalen.add(loc);
             if (w.locations) {
                 for (const loc of w.locations) avg.locations.add(loc);
             }
@@ -632,7 +637,7 @@ function computeDocentMetrics() {
                 const reistijdOk = checkReistijd(dayLessons, state.locationToBranch);
                 teacher.pendelDagen.push({
                     day,
-                    locaties: [...dayBranches].join(' + '),
+                    locaties: [...dayBranches].sort().join(' + '),
                     reistijdOk,
                 });
                 // Identify pendel gap slots: the free slots between locations used for travel
@@ -1415,6 +1420,10 @@ function computeIndicatorsForFilter(locationFilter) {
     indicators.D5 = computeIndicator('D5', n > 0 ? teachers.filter(t => t.lateUren > 1).length / n * 100 : 0);
     indicators.D6 = computeIndicator('D6', n > 0 ? teachers.filter(t => t.lokaalRating === 1).length / n * 100 : 0);
 
+    // D7: totaal pendelmomenten per week (elke dag dat iemand pendelt telt als 1)
+    const totalPendelMomenten = teachers.reduce((s, t) => s + t.pendelDagen.length, 0);
+    indicators.D7 = computeIndicator('D7', totalPendelMomenten);
+
     // === ONDERBOUW ===
     const nk = klassen.length;
     indicators.O1 = computeIndicator('O1', nk > 0 ? klassen.filter(k => k.tussenuren.totaal > 0).length / nk * 100 : 0);
@@ -1578,7 +1587,7 @@ function renderDocenten() {
     const teachers = filterByLocation(sourceTeachers, 'teacher');
 
     // Indicator cards + trend
-    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']);
+    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7']);
     renderDocentTrendChart();
 
     // KPIs
@@ -1692,29 +1701,6 @@ function renderDocentTussenuren(teachers) {
         </tr>`;
     }).join('');
 
-    // Bar chart: top 10
-    const top10 = sorted.filter(t => parseFloat(t.tussenuren.totaal) > 0).slice(0, 10);
-    state.charts.docTussenuren = new Chart(
-        document.getElementById('chart-doc-tussenuren'), {
-            type: 'bar',
-            data: {
-                labels: top10.map(t => t.code),
-                datasets: [{
-                    label: 'Tussenuren',
-                    data: top10.map(t => parseFloat(t.tussenuren.totaal)),
-                    backgroundColor: COLORS.red,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Tussenuren' } },
-                },
-            },
-        }
-    );
 }
 
 function renderDocentLokaal(teachers) {
@@ -1777,12 +1763,7 @@ function renderDocentPendel(teachers) {
 
     const rows = [];
     for (const t of pendelaars) {
-        // Deduplicate pendelDagen by day+locaties (for averaged data across weeks)
-        const seen = new Set();
         for (const pd of t.pendelDagen) {
-            const key = `${pd.day}-${pd.locaties}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
             rows.push(`<tr>
                 <td>${t.code}</td>
                 <td>${DAYS_LABELS[pd.day - 1]}</td>
@@ -2549,9 +2530,7 @@ function renderTrendChart() {
     if (!section) return;
 
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = Object.values(stored)
-        .filter(e => !e.isVacation)  // Skip vacation weeks
-        .sort((a, b) => a.week.localeCompare(b.week));
+    const entries = filterVacationWeeks(Object.values(stored));
 
     if (entries.length < 1) {
         section.classList.add('hidden');
@@ -2623,9 +2602,7 @@ function renderDocentTrendChart() {
     if (!section) return;
 
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = Object.values(stored)
-        .filter(e => !e.isVacation)  // Skip vacation weeks
-        .sort((a, b) => a.week.localeCompare(b.week));
+    const entries = filterVacationWeeks(Object.values(stored));
 
     if (entries.length < 2) {
         section.classList.add('hidden');
@@ -2643,6 +2620,7 @@ function renderDocentTrendChart() {
         { key: 'D4', label: 'Pendel zonder reistijd (%)', color: 'rgba(155, 89, 182, 0.85)' },
         { key: 'D5', label: 'Late uren >1/week (%)', color: 'rgba(41, 128, 185, 0.85)' },
         { key: 'D6', label: 'Vast lokaal (%)', color: 'rgba(39, 174, 96, 0.85)' },
+        { key: 'D7', label: 'Pendelmomenten/week', color: 'rgba(127, 140, 141, 0.85)' },
     ];
 
     const datasets = kpiDefs.map(def => ({
@@ -2679,6 +2657,45 @@ function renderDocentTrendChart() {
 }
 
 // ================================================================
+
+/**
+ * Deduplicate pendelDagen by day+locaties, keeping worst reistijdOk.
+ */
+function deduplicatePendelDagen(dagen) {
+    const map = new Map();
+    for (const pd of dagen) {
+        const key = `${pd.day}-${pd.locaties}`;
+        const existing = map.get(key);
+        if (!existing) {
+            map.set(key, { ...pd });
+        } else {
+            // Keep worst case: if any occurrence has reistijdOk=false, mark as false
+            if (!pd.reistijdOk) existing.reistijdOk = false;
+        }
+    }
+    return [...map.values()];
+}
+
+/**
+ * Filter vacation weeks from stored score entries.
+ * Detects on-the-fly: weeks with < 30% of median lesson count.
+ */
+function filterVacationWeeks(entries) {
+    const withLessons = entries.filter(e => e.totalLessons > 0);
+    if (withLessons.length < 3) {
+        // Not enough data for median — just exclude entries without totalLessons
+        return entries.filter(e => e.totalLessons > 0).sort((a, b) => a.week.localeCompare(b.week));
+    }
+
+    const counts = withLessons.map(e => e.totalLessons).sort((a, b) => a - b);
+    const median = counts[Math.floor(counts.length / 2)];
+    const threshold = median * 0.3;
+
+    // Exclude: weeks without lesson count (legacy data) AND weeks below threshold
+    return entries
+        .filter(e => e.totalLessons >= threshold)
+        .sort((a, b) => a.week.localeCompare(b.week));
+}
 
 function setText(id, text) {
     const el = document.getElementById(id);
