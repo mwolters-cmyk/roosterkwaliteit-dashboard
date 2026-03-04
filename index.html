@@ -35,6 +35,10 @@
         <div class="filter-group">
             <label>Week:</label>
             <select id="week-select"></select>
+            <label class="file-upload-btn" id="cumlaude-label">
+                <input type="file" id="cumlaude-upload" accept=".xlsx,.xls" hidden>
+                <span id="cumlaude-status">Bovenbouw Excel</span>
+            </label>
             <button id="btn-load-all" class="btn-primary">Alle weken laden</button>
         </div>
         <div class="filter-group">
@@ -42,13 +46,6 @@
             <button class="filter-btn active" data-filter="alle">Alle</button>
             <button class="filter-btn" data-filter="Athena">Athena</button>
             <button class="filter-btn" data-filter="Socrates">Socrates</button>
-        </div>
-        <div class="filter-group">
-            <label>Bovenbouw:</label>
-            <label class="file-upload-btn" id="cumlaude-label">
-                <input type="file" id="cumlaude-upload" accept=".xlsx,.xls" hidden>
-                <span id="cumlaude-status">CumLaude uploaden</span>
-            </label>
         </div>
         <div id="progress-container" class="hidden">
             <div id="progress-bar"><div id="progress-fill"></div></div>
@@ -212,27 +209,9 @@
         <!-- Spreiding & Belasting -->
         <div class="chart-section">
             <h2>Spreiding &amp; Belasting</h2>
-            <div class="chart-table-grid">
-                <div class="table-container">
-                    <h3>Lesuren per dag</h3>
-                    <div id="doc-heatmap"></div>
-                </div>
-                <div class="chart-container">
-                    <h3>8e/9e uren per docent</h3>
-                    <canvas id="chart-doc-late"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Fairness -->
-        <div class="chart-section">
-            <h2>Fairness</h2>
-            <div class="chart-table-grid">
-                <div class="chart-container">
-                    <h3>Verdeling kwaliteitsscores</h3>
-                    <canvas id="chart-doc-fairness"></canvas>
-                </div>
-                <div class="fairness-stats" id="doc-fairness-stats"></div>
+            <div class="table-container">
+                <h3>Lesuren per dag</h3>
+                <div id="doc-heatmap"></div>
             </div>
         </div>
     </section>

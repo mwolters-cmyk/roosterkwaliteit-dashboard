@@ -60,6 +60,7 @@ const KEY_INDICATORS = {
 let state = {
     activeTab: 'docenten',
     activeFilter: 'alle',
+    currentWeekCode: null,
     // Reference data
     branches: {},          // branchId -> {id, name}
     locationToBranch: {},  // locationName -> branchName (Athena/Socrates)
@@ -388,6 +389,7 @@ async function loadAllWeeks() {
 
 async function loadWeekData(weekCode, { silent = false } = {}) {
     if (!silent) showProgress(true);
+    state.currentWeekCode = weekCode;
     state.groupAppointments = {};
     state.teacherAppointments = {};
 
@@ -1354,7 +1356,7 @@ function computeIndicatorsForFilter(locationFilter) {
 }
 
 function saveWeekScore() {
-    const weekCode = document.getElementById('week-select')?.value;
+    const weekCode = state.currentWeekCode || document.getElementById('week-select')?.value;
     if (!weekCode || !state.indicatorsByLocation) return;
 
     const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
@@ -1466,9 +1468,6 @@ function renderDocenten() {
 
     // Spreiding & belasting
     renderDocentSpreiding(teachers);
-
-    // Fairness
-    renderDocentFairness(teachers);
 }
 
 function filterByLocation(teachers, type) {
@@ -1669,103 +1668,6 @@ function renderDocentSpreiding(teachers) {
     }
     html += '</tbody></table>';
     container.innerHTML = html;
-
-    // Bar chart: 8e/9e uren per docent
-    const withLate = teachers.filter(t => t.lateUren > 0)
-        .sort((a, b) => b.lateUren - a.lateUren)
-        .slice(0, 15);
-
-    state.charts.docLate = new Chart(
-        document.getElementById('chart-doc-late'), {
-            type: 'bar',
-            data: {
-                labels: withLate.map(t => t.code),
-                datasets: [{
-                    label: '8e/9e uren',
-                    data: withLate.map(t => t.lateUren),
-                    backgroundColor: COLORS.orange,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Aantal' } },
-                },
-            },
-        }
-    );
-}
-
-function renderDocentFairness(teachers) {
-    if (teachers.length === 0) return;
-
-    const scores = teachers.map(t => t.fairnessScore);
-    const mean = scores.reduce((s, v) => s + v, 0) / scores.length;
-    const stdev = Math.sqrt(scores.reduce((s, v) => s + (v - mean) ** 2, 0) / scores.length);
-
-    // Histogram
-    const min = Math.min(...scores);
-    const max = Math.max(...scores);
-    const binCount = Math.min(10, Math.ceil(Math.sqrt(scores.length)));
-    const binWidth = (max - min) / binCount || 1;
-    const bins = Array(binCount).fill(0);
-    const binLabels = [];
-
-    for (let i = 0; i < binCount; i++) {
-        const lo = min + i * binWidth;
-        const hi = lo + binWidth;
-        binLabels.push(`${lo.toFixed(0)}-${hi.toFixed(0)}`);
-        for (const s of scores) {
-            if (s >= lo && (s < hi || (i === binCount - 1 && s <= hi))) bins[i]++;
-        }
-    }
-
-    state.charts.docFairness = new Chart(
-        document.getElementById('chart-doc-fairness'), {
-            type: 'bar',
-            data: {
-                labels: binLabels,
-                datasets: [{
-                    label: 'Docenten',
-                    data: bins,
-                    backgroundColor: COLORS.primaryBg,
-                    borderColor: COLORS.primary,
-                    borderWidth: 1,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { title: { display: true, text: 'Kwaliteitsscore (lager = beter)' } },
-                    y: { beginAtZero: true, title: { display: true, text: 'Aantal docenten' } },
-                },
-            },
-        }
-    );
-
-    // Stats
-    const statsEl = document.getElementById('doc-fairness-stats');
-    const fairnessLevel = stdev < 5 ? 'good' : stdev < 15 ? 'warn' : 'bad';
-    const fairnessText = stdev < 5 ? 'Eerlijk' : stdev < 15 ? 'Redelijk' : 'Ongelijk';
-
-    statsEl.innerHTML = `
-        <div class="fairness-stat">
-            <div class="value">${mean.toFixed(1)}</div>
-            <div class="label">Gemiddelde score</div>
-        </div>
-        <div class="fairness-stat">
-            <div class="value" style="color: var(--${fairnessLevel === 'good' ? 'success' : fairnessLevel === 'warn' ? 'accent' : 'accent-red'})">${stdev.toFixed(1)}</div>
-            <div class="label">Standaarddeviatie</div>
-        </div>
-        <div class="fairness-stat">
-            <div class="value">${fairnessText}</div>
-            <div class="label">Verdeling</div>
-        </div>
-    `;
 }
 
 // ================================================================
