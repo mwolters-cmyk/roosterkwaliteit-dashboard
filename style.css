@@ -450,6 +450,91 @@ footer {
     color: white;
 }
 
+/* ===== Overall Rapportcijfer Card ===== */
+.score-card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.5rem 2rem;
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+.score-label {
+    font-size: 0.8rem;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.score-value {
+    font-size: 3.5rem;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 0.35rem;
+}
+.score-subtitle {
+    font-size: 0.85rem;
+    color: var(--text-light);
+}
+.score-green { color: var(--success); }
+.score-orange { color: var(--accent); }
+.score-red { color: var(--accent-red); }
+
+/* Status dot inline (for subtitle) */
+.dot-green, .dot-orange, .dot-red {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 2px;
+    vertical-align: middle;
+}
+.dot-green { background: var(--success); }
+.dot-orange { background: var(--accent); }
+.dot-red { background: var(--accent-red); }
+
+/* ===== Indicator Cards (stoplicht) ===== */
+.indicator-section {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+.indicator-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    padding: 0.7rem 0.5rem;
+    text-align: center;
+    border-top: 3px solid var(--border);
+    transition: transform 0.15s;
+}
+.indicator-card:hover { transform: translateY(-2px); }
+.indicator-card.green { border-top-color: var(--success); }
+.indicator-card.orange { border-top-color: var(--accent); }
+.indicator-card.red { border-top-color: var(--accent-red); }
+.indicator-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-bottom: 0.2rem;
+}
+.indicator-dot.green { background: var(--success); }
+.indicator-dot.orange { background: var(--accent); }
+.indicator-dot.red { background: var(--accent-red); }
+.indicator-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+}
+.indicator-label {
+    font-size: 0.7rem;
+    color: var(--text-light);
+    margin-top: 0.15rem;
+    line-height: 1.25;
+}
+
 /* ===== Leerlingen Sub-filter ===== */
 .ll-sub-filter {
     display: flex;

@@ -38,6 +38,26 @@ const COLORS = {
 };
 
 // ================================================================
+// KEY INDICATORS — Streefwaarden met stoplicht-drempels
+// ================================================================
+const KEY_INDICATORS = {
+    D1: { label: 'Lokaalwissel buiten pauze', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
+    D2: { label: 'Tussenuren >2/week', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
+    D3: { label: '5+ uur aaneengesloten', unit: '%', green: 0, orange: 5, higherIsBetter: false, category: 'docenten' },
+    D4: { label: 'Pendel zonder reistijd', unit: '%', green: 0, orange: 25, higherIsBetter: false, category: 'docenten' },
+    D5: { label: 'Late uren >1/week', unit: '%', green: 10, orange: 25, higherIsBetter: false, category: 'docenten' },
+    D6: { label: 'Fairness spreiding', unit: '', green: 5, orange: 15, higherIsBetter: false, category: 'docenten' },
+    O1: { label: 'Klassen met tussenuren', unit: '%', green: 5, orange: 20, higherIsBetter: false, category: 'onderbouw' },
+    O2: { label: 'Mentoruur aan rand', unit: '%', green: 90, orange: 70, higherIsBetter: true, category: 'onderbouw' },
+    O3: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'onderbouw' },
+    O4: { label: 'Klassen met 8e/9e uur', unit: '%', green: 10, orange: 30, higherIsBetter: false, category: 'onderbouw' },
+    B1: { label: 'Tussenuren ≥3 op dag', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
+    B2: { label: 'Onwenselijke blokuren', unit: '%', green: 0, orange: 10, higherIsBetter: false, category: 'bovenbouw' },
+    B3: { label: 'Leerlingen met 9e uur', unit: '%', green: 5, orange: 15, higherIsBetter: false, category: 'bovenbouw' },
+    S1: { label: 'Uitval', unit: '%', green: 3, orange: 8, higherIsBetter: false, category: 'school' },
+};
+
+// ================================================================
 // STATE
 // ================================================================
 let state = {
@@ -57,6 +77,10 @@ let state = {
     docentMetrics: null,
     leerlingMetrics: null,
     achterafMetrics: null,
+    // Key indicators
+    indicators: null,       // { D1: {value, score, status}, ... }
+    subtotals: null,        // { docenten: N, onderbouw: N, ... }
+    overallScore: null,     // 0-10
     // UI state
     leerlingSubFilter: 'alle',  // 'alle', 'onderbouw', 'bovenbouw'
     // Charts
@@ -860,6 +884,8 @@ function computeBovenbouwMetrics() {
     let allStudentTussenuren = 0;
     let allStudentLate = 0;
     let totalStudentCount = 0;
+    let totalMaxTussen3Plus = 0;  // for B1 indicator
+    let totalWithUur9 = 0;        // for B3 indicator
 
     for (const [klasName, students] of Object.entries(studentsByKlas)) {
         const perStudent = [];
@@ -945,6 +971,11 @@ function computeBovenbouwMetrics() {
         allStudentTussenuren += perStudent.reduce((s, m) => s + m.tussenuren, 0);
         allStudentLate += perStudent.reduce((s, m) => s + m.lateUren8 + m.lateUren9, 0);
         totalStudentCount += perStudent.length;
+        // Indicator stats (B1: max tussenuren on any day ≥3, B3: has 9th hour)
+        for (const ps of perStudent) {
+            if (Math.max(...Object.values(ps.tussenPerDag)) >= 3) totalMaxTussen3Plus++;
+            if (ps.lateUren9 > 0) totalWithUur9++;
+        }
 
         // Compute avg tussenuren per dag
         const avgTussenPerDag = {};
@@ -980,6 +1011,8 @@ function computeBovenbouwMetrics() {
     result.totalStudents = totalStudentCount;
     result.avgTussenuren = totalStudentCount > 0 ? +(allStudentTussenuren / totalStudentCount).toFixed(2) : 0;
     result.avgLateUren = totalStudentCount > 0 ? +(allStudentLate / totalStudentCount).toFixed(1) : 0;
+    result.studentsWithMaxTussen3Plus = totalMaxTussen3Plus;
+    result.studentsWithUur9 = totalWithUur9;
 
     // Bovenbouw vakgroep blokuren analysis
     const bovenbouwGroupPattern = /^[456]s?\./i;
@@ -1103,6 +1136,164 @@ function computeAchterafMetrics() {
 }
 
 // ================================================================
+// KEY INDICATOR SCORING
+// ================================================================
+
+function indicatorScore(value, greenMax, orangeMax, higherIsBetter) {
+    if (higherIsBetter) {
+        value = 100 - value;
+        const g = 100 - greenMax;
+        const o = 100 - orangeMax;
+        greenMax = g;
+        orangeMax = o;
+    }
+    if (value <= 0) return 10;
+    if (greenMax > 0 && value <= greenMax) {
+        return 10 - (value / greenMax) * 3; // 10 → 7
+    }
+    if (value <= orangeMax) {
+        const range = orangeMax - greenMax;
+        if (range <= 0) return 7;
+        return 7 - ((value - greenMax) / range) * 3; // 7 → 4
+    }
+    // Red zone: 4 → 0
+    const redRange = Math.max(orangeMax - greenMax, 1);
+    const t = Math.min((value - orangeMax) / redRange, 1);
+    return Math.max(4 - t * 4, 0);
+}
+
+function indicatorStatus(value, greenMax, orangeMax, higherIsBetter) {
+    if (higherIsBetter) {
+        if (value >= greenMax) return 'green';
+        if (value >= orangeMax) return 'orange';
+        return 'red';
+    }
+    if (value <= greenMax) return 'green';
+    if (value <= orangeMax) return 'orange';
+    return 'red';
+}
+
+function computeIndicator(key, value) {
+    const def = KEY_INDICATORS[key];
+    const v = +value.toFixed(1);
+    return {
+        value: v,
+        score: +indicatorScore(v, def.green, def.orange, def.higherIsBetter).toFixed(1),
+        status: indicatorStatus(v, def.green, def.orange, def.higherIsBetter),
+    };
+}
+
+function computeIndicators() {
+    const dm = state.docentMetrics;
+    const lm = state.leerlingMetrics;
+    const am = state.achterafMetrics;
+    if (!dm || !lm || !am) return;
+
+    const indicators = {};
+
+    // === DOCENTEN ===
+    // D1: % docenten met lokaalwissel buiten pauze (rating 4)
+    indicators.D1 = computeIndicator('D1', dm.totalTeachers > 0
+        ? dm.teachers.filter(t => t.lokaalRating === 4).length / dm.totalTeachers * 100 : 0);
+
+    // D2: % docenten met tussenuren >2/week
+    indicators.D2 = computeIndicator('D2', dm.totalTeachers > 0
+        ? dm.teachers.filter(t => t.tussenuren.totaal > 2).length / dm.totalTeachers * 100 : 0);
+
+    // D3: % docenten met 5+ aaneengesloten lesuren
+    indicators.D3 = computeIndicator('D3', dm.totalTeachers > 0
+        ? dm.teachers.filter(t => t.maxAaneengesloten >= 5).length / dm.totalTeachers * 100 : 0);
+
+    // D4: % pendelaars zonder voldoende reistijd
+    const pendelaars = dm.pendelaars;
+    indicators.D4 = computeIndicator('D4', pendelaars.length > 0
+        ? pendelaars.filter(t => t.pendelDagen.some(d => !d.reistijdOk)).length / pendelaars.length * 100 : 0);
+
+    // D5: % docenten met meer dan 1 late uur (8e/9e)
+    indicators.D5 = computeIndicator('D5', dm.totalTeachers > 0
+        ? dm.teachers.filter(t => t.lateUren > 1).length / dm.totalTeachers * 100 : 0);
+
+    // D6: stdev van fairnessScore (spreiding belasting)
+    const fScores = dm.teachers.map(t => t.fairnessScore);
+    const fMean = fScores.length > 0 ? fScores.reduce((s, v) => s + v, 0) / fScores.length : 0;
+    const fVar = fScores.length > 0 ? fScores.reduce((s, v) => s + (v - fMean) ** 2, 0) / fScores.length : 0;
+    indicators.D6 = computeIndicator('D6', Math.sqrt(fVar));
+
+    // === ONDERBOUW ===
+    // O1: % klassen met tussenuren op enige dag
+    indicators.O1 = computeIndicator('O1', lm.totalKlassen > 0
+        ? lm.klassen.filter(k => k.tussenuren.totaal > 0).length / lm.totalKlassen * 100 : 0);
+
+    // O2: % mentoruren aan rand van dag (hoger = beter)
+    indicators.O2 = computeIndicator('O2', lm.mentorRand);
+
+    // O3: % onwenselijke blokuren (onderbouw)
+    const obBlok = lm.klassen.flatMap(k => k.blokuren);
+    indicators.O3 = computeIndicator('O3', obBlok.length > 0
+        ? obBlok.filter(b => !b.isOk).length / obBlok.length * 100 : 0);
+
+    // O4: % klassen met 8e of 9e uur
+    indicators.O4 = computeIndicator('O4', lm.totalKlassen > 0
+        ? lm.klassen.filter(k => k.lateUren8 + k.lateUren9 > 0).length / lm.totalKlassen * 100 : 0);
+
+    // === BOVENBOUW (alleen met CumLaude data) ===
+    if (lm.bovenbouw) {
+        const bv = lm.bovenbouw;
+        // B1: % leerlingen met max tussenuren ≥3 op 1 dag
+        indicators.B1 = computeIndicator('B1', bv.totalStudents > 0
+            ? bv.studentsWithMaxTussen3Plus / bv.totalStudents * 100 : 0);
+        // B2: % onwenselijke blokuren bovenbouw vakgroepen
+        indicators.B2 = computeIndicator('B2', bv.vakgroepBlokuren.length > 0
+            ? bv.vakgroepBlokuren.filter(b => !b.isOk).length / bv.vakgroepBlokuren.length * 100 : 0);
+        // B3: % leerlingen met 9e uur
+        indicators.B3 = computeIndicator('B3', bv.totalStudents > 0
+            ? bv.studentsWithUur9 / bv.totalStudents * 100 : 0);
+    }
+
+    // === SCHOOL-BREED ===
+    indicators.S1 = computeIndicator('S1', parseFloat(am.uitvalPct) || 0);
+
+    // Subtotalen per categorie
+    const categories = {};
+    for (const [key, ind] of Object.entries(indicators)) {
+        const cat = KEY_INDICATORS[key].category;
+        if (!categories[cat]) categories[cat] = [];
+        categories[cat].push(ind.score);
+    }
+    const subtotals = {};
+    for (const [cat, scores] of Object.entries(categories)) {
+        subtotals[cat] = +(scores.reduce((s, v) => s + v, 0) / scores.length).toFixed(1);
+    }
+
+    // Overall = gemiddelde van alle indicator-scores
+    const allScores = Object.values(indicators).map(i => i.score);
+    const overall = allScores.length > 0 ? allScores.reduce((s, v) => s + v, 0) / allScores.length : 0;
+
+    state.indicators = indicators;
+    state.subtotals = subtotals;
+    state.overallScore = +overall.toFixed(1);
+
+    // Sla score op voor trendgrafiek
+    saveWeekScore();
+    console.log('Indicators:', state.indicators, 'Overall:', state.overallScore);
+}
+
+function saveWeekScore() {
+    const weekCode = document.getElementById('week-select')?.value;
+    if (!weekCode || state.overallScore == null) return;
+
+    const allScores = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    allScores[weekCode] = {
+        week: weekCode,
+        overall: state.overallScore,
+        docenten: state.subtotals?.docenten ?? null,
+        onderbouw: state.subtotals?.onderbouw ?? null,
+        bovenbouw: state.subtotals?.bovenbouw ?? null,
+    };
+    localStorage.setItem('rooster_scores', JSON.stringify(allScores));
+}
+
+// ================================================================
 // COMPUTE ALL METRICS
 // ================================================================
 
@@ -1110,10 +1301,12 @@ function computeAllMetrics() {
     state.docentMetrics = computeDocentMetrics();
     state.leerlingMetrics = computeLeerlingMetrics();
     state.achterafMetrics = computeAchterafMetrics();
+    computeIndicators();
     console.log('Metrics computed:', {
         docenten: state.docentMetrics.totalTeachers,
         klassen: state.leerlingMetrics.totalKlassen,
         lessen: state.achterafMetrics.totalLessen,
+        overall: state.overallScore,
     });
 }
 
@@ -1130,6 +1323,12 @@ function renderDashboard() {
     if (activeEl) activeEl.classList.remove('hidden');
 
     destroyCharts();
+
+    // Overall rapportcijfer + trendgrafiek (altijd zichtbaar)
+    if (state.indicators) {
+        renderOverallScore();
+        renderTrendChart();
+    }
 
     switch (state.activeTab) {
         case 'docenten': renderDocenten(); break;
@@ -1155,6 +1354,9 @@ function renderDocenten() {
 
     // Apply location filter
     const teachers = filterByLocation(m.teachers, 'teacher');
+
+    // Indicator cards
+    renderIndicatorCards('doc-indicators', ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']);
 
     // KPIs
     setText('kpi-doc-total', teachers.length);
@@ -1501,6 +1703,9 @@ function renderLeerlingen() {
     if (bovenbouwEl) bovenbouwEl.classList.toggle('hidden', !showBovenbouw);
 
     if (showOnderbouw) {
+        // Indicator cards onderbouw
+        renderIndicatorCards('ll-indicators', ['O1', 'O2', 'O3', 'O4']);
+
         const klassen = filterKlassenByLocation(m.klassen);
 
         // KPIs (onderbouw)
@@ -1869,6 +2074,9 @@ function renderBovenbouw() {
     if (kpiEl) kpiEl.classList.remove('hidden');
     if (dataEl) dataEl.classList.remove('hidden');
 
+    // Indicator cards bovenbouw
+    renderIndicatorCards('bv-indicators', ['B1', 'B2', 'B3']);
+
     const klassen = filterKlassenByLocation(bv.klassen);
 
     // KPIs
@@ -2035,6 +2243,9 @@ function renderAchteraf() {
     const m = state.achterafMetrics;
     if (!m) return;
 
+    // Indicator card
+    renderIndicatorCards('ach-indicators', ['S1']);
+
     // KPIs
     setText('kpi-ach-uitval', m.uitvalPct + '%');
     setText('kpi-ach-vervangen', '-'); // Can't determine from current data
@@ -2158,6 +2369,137 @@ function renderAchterafDocent(m) {
             <td class="num"><span class="badge ${cls}">${e.pct}%</span></td>
         </tr>`;
     }).join('');
+}
+
+// ================================================================
+// RENDERING — INDICATORS & RAPPORTCIJFER
+// ================================================================
+
+function renderOverallScore() {
+    const section = document.getElementById('overall-score-section');
+    if (!section || !state.indicators) return;
+    section.classList.remove('hidden');
+
+    const score = state.overallScore;
+    const scoreEl = document.getElementById('overall-score');
+    const subtitleEl = document.getElementById('overall-score-subtitle');
+
+    const cls = score >= 7 ? 'score-green' : score >= 4 ? 'score-orange' : 'score-red';
+    scoreEl.className = 'score-value ' + cls;
+    scoreEl.textContent = score.toFixed(1);
+
+    const inds = Object.values(state.indicators);
+    const g = inds.filter(i => i.status === 'green').length;
+    const o = inds.filter(i => i.status === 'orange').length;
+    const r = inds.filter(i => i.status === 'red').length;
+    subtitleEl.innerHTML = `${inds.length} indicatoren geanalyseerd &mdash; <span class="dot-green"></span>${g} groen &middot; <span class="dot-orange"></span>${o} oranje &middot; <span class="dot-red"></span>${r} rood`;
+}
+
+function renderIndicatorCards(containerId, indicatorKeys) {
+    const container = document.getElementById(containerId);
+    if (!container || !state.indicators) return;
+
+    let html = '';
+    for (const key of indicatorKeys) {
+        const ind = state.indicators[key];
+        if (!ind) continue;
+        const def = KEY_INDICATORS[key];
+        const displayVal = def.unit === '%' ? ind.value + '%' : ind.value;
+
+        html += `<div class="indicator-card ${ind.status}">
+            <div class="indicator-dot ${ind.status}"></div>
+            <div class="indicator-value">${displayVal}</div>
+            <div class="indicator-label">${def.label}</div>
+        </div>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderTrendChart() {
+    const section = document.getElementById('trend-section');
+    if (!section) return;
+
+    const allScores = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
+    const entries = Object.values(allScores).sort((a, b) => a.week.localeCompare(b.week));
+
+    if (entries.length < 1) {
+        section.classList.add('hidden');
+        return;
+    }
+    section.classList.remove('hidden');
+
+    const labels = entries.map(e => {
+        const week = parseInt(e.week.slice(4));
+        return `W${week}`;
+    });
+
+    const currentWeek = document.getElementById('week-select')?.value;
+
+    const datasets = [
+        {
+            label: 'Docenten',
+            data: entries.map(e => e.docenten),
+            borderColor: 'rgba(26, 82, 118, 0.9)',
+            backgroundColor: 'rgba(26, 82, 118, 0.1)',
+            tension: 0.3,
+            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
+            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(26, 82, 118, 1)' : 'rgba(26, 82, 118, 0.6)'),
+        },
+        {
+            label: 'Onderbouw',
+            data: entries.map(e => e.onderbouw),
+            borderColor: 'rgba(39, 174, 96, 0.9)',
+            backgroundColor: 'rgba(39, 174, 96, 0.1)',
+            tension: 0.3,
+            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
+            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(39, 174, 96, 1)' : 'rgba(39, 174, 96, 0.6)'),
+        },
+        {
+            label: 'Bovenbouw',
+            data: entries.map(e => e.bovenbouw),
+            borderColor: 'rgba(230, 126, 34, 0.9)',
+            backgroundColor: 'rgba(230, 126, 34, 0.1)',
+            borderDash: [5, 5],
+            tension: 0.3,
+            pointRadius: entries.map(e => e.week === currentWeek ? 6 : 3),
+            pointBackgroundColor: entries.map(e => e.week === currentWeek ? 'rgba(230, 126, 34, 1)' : 'rgba(230, 126, 34, 0.6)'),
+            spanGaps: false,
+        },
+    ];
+
+    if (state.charts.trend) state.charts.trend.destroy();
+    state.charts.trend = new Chart(
+        document.getElementById('chart-trend'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        min: 0, max: 10,
+                        title: { display: true, text: 'Rapportcijfer' },
+                        ticks: { stepSize: 1 },
+                    },
+                },
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                const idx = items[0]?.dataIndex;
+                                if (idx == null) return '';
+                                const e = entries[idx];
+                                const week = parseInt(e.week.slice(4));
+                                const year = e.week.slice(0, 4);
+                                return `Week ${week} (${year})`;
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    );
 }
 
 // ================================================================

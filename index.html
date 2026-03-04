@@ -68,8 +68,28 @@
         <p>Selecteer een week en klik op <strong>Laden</strong> om het rooster te analyseren.</p>
     </div>
 
+    <!-- ===================== OVERALL RAPPORTCIJFER ===================== -->
+    <div id="overall-score-section" class="hidden">
+        <div class="score-card">
+            <div class="score-label">ROOSTERKWALITEIT</div>
+            <div class="score-value" id="overall-score">-</div>
+            <div class="score-subtitle" id="overall-score-subtitle"></div>
+        </div>
+    </div>
+
+    <!-- ===================== TRENDGRAFIEK ===================== -->
+    <div id="trend-section" class="chart-section hidden">
+        <h2>Kwaliteitsverloop</h2>
+        <div class="chart-container-wide" style="min-height:280px">
+            <canvas id="chart-trend"></canvas>
+        </div>
+    </div>
+
     <!-- ===================== TAB 1: DOCENTEN ===================== -->
     <section id="tab-docenten" class="tab-content hidden">
+
+        <!-- Docent Indicators -->
+        <div id="doc-indicators" class="indicator-section"></div>
 
         <!-- Management Summary -->
         <div id="doc-summary" class="mgmt-summary"></div>
@@ -201,6 +221,9 @@
 
         <!-- ===== ONDERBOUW SECTION ===== -->
         <div id="ll-onderbouw-section">
+
+            <!-- Onderbouw Indicators -->
+            <div id="ll-indicators" class="indicator-section"></div>
 
             <!-- Management Summary -->
             <div id="ll-summary" class="mgmt-summary"></div>
@@ -342,6 +365,9 @@
         <!-- ===== BOVENBOUW SECTION ===== -->
         <div id="ll-bovenbouw-section">
 
+            <!-- Bovenbouw Indicators -->
+            <div id="bv-indicators" class="indicator-section"></div>
+
             <!-- Bovenbouw Summary -->
             <div id="bv-summary" class="mgmt-summary"></div>
 
@@ -431,6 +457,9 @@
 
     <!-- ===================== TAB 3: ACHTERAF ===================== -->
     <section id="tab-achteraf" class="tab-content hidden">
+
+        <!-- Achteraf Indicator -->
+        <div id="ach-indicators" class="indicator-section"></div>
 
         <!-- Management Summary -->
         <div id="ach-summary" class="mgmt-summary"></div>
