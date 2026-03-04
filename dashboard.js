@@ -1,6 +1,47 @@
 'use strict';
 
 // ================================================================
+// API RESPONSE CACHE (IndexedDB) — test speedup
+// ================================================================
+const WeekCache = {
+    _db: null,
+    async open() {
+        if (this._db) return this._db;
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('rooster_cache', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('weeks');
+            req.onsuccess = () => { this._db = req.result; resolve(this._db); };
+            req.onerror = () => reject(req.error);
+        });
+    },
+    async get(weekCode) {
+        const db = await this.open();
+        return new Promise(resolve => {
+            const tx = db.transaction('weeks', 'readonly');
+            const req = tx.objectStore('weeks').get(weekCode);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
+        });
+    },
+    async set(weekCode, data) {
+        const db = await this.open();
+        return new Promise(resolve => {
+            const tx = db.transaction('weeks', 'readwrite');
+            tx.objectStore('weeks').put(data, weekCode);
+            tx.oncomplete = () => resolve();
+        });
+    },
+    async clear() {
+        const db = await this.open();
+        return new Promise(resolve => {
+            const tx = db.transaction('weeks', 'readwrite');
+            tx.objectStore('weeks').clear();
+            tx.oncomplete = () => { console.log('Week cache cleared'); resolve(); };
+        });
+    }
+};
+
+// ================================================================
 // CONFIGURATION
 // ================================================================
 const API_BASE = 'https://gymnasiumleiden.zportal.nl/api/v3';
@@ -109,7 +150,7 @@ let state = {
     // Leerling scores per locatie per bouw
     leerlingScoresByLocation: null,
     // UI state
-    leerlingSubFilter: 'alle',  // 'alle', 'onderbouw', 'bovenbouw'
+    leerlingSubFilter: 'onderbouw',  // 'onderbouw', 'bovenbouw'
     // Charts
     charts: {},
     sortState: {},
@@ -446,12 +487,12 @@ function computeAveragedDocentMetrics() {
     const weekEntries = Object.values(stored).filter(e => e.totalLessons > 0);
     if (weekEntries.length === 0) return;
 
-    // Detect vacation weeks: < 30% of median lessons
+    // Detect special weeks (vacations, intro, exam, project): < 65% of median lessons
     const lessonCounts = weekEntries.map(e => e.totalLessons).sort((a, b) => a - b);
     const median = lessonCounts[Math.floor(lessonCounts.length / 2)];
-    const threshold = median * 0.3;
+    const threshold = median * 0.65;
     const vacationWeeks = new Set(weekEntries.filter(e => e.totalLessons < threshold).map(e => e.week));
-    console.log(`Vacation weeks detected (< ${Math.round(threshold)} lessons): ${[...vacationWeeks].map(w => 'W' + parseInt(w.slice(4))).join(', ')}`);
+    console.log(`Special weeks excluded (< ${Math.round(threshold)} lessons): ${[...vacationWeeks].map(w => 'W' + parseInt(w.slice(4))).join(', ')}`);
 
     // Mark vacation weeks in localStorage
     for (const [weekCode, entry] of Object.entries(stored)) {
@@ -535,30 +576,41 @@ async function loadWeekData(weekCode, { silent = false } = {}) {
     state.groupAppointments = {};
     state.teacherAppointments = {};
 
-    // Load liveschedule per teacher (all employees)
-    const teacherCodes = state.allTeacherCodes;
-    const teacherTasks = teacherCodes.map(code => () =>
-        apiGet('liveschedule', { week: weekCode, teacher: code })
-    );
+    // Try cache first
+    const cached = await WeekCache.get(weekCode);
+    if (cached) {
+        state.teacherAppointments = cached;
+        if (!silent) updateProgress(1, 1, 'Uit cache');
+        console.log(`Week ${weekCode}: loaded from cache (${Object.keys(cached).length} teachers)`);
+    } else {
+        // Load liveschedule per teacher (all employees)
+        const teacherCodes = state.allTeacherCodes;
+        const teacherTasks = teacherCodes.map(code => () =>
+            apiGet('liveschedule', { week: weekCode, teacher: code })
+        );
 
-    if (!silent) updateProgress(0, teacherTasks.length, 'Docenten laden');
-    const teacherResults = await parallelFetch(teacherTasks, (done, total) => {
-        if (!silent) updateProgress(done, total, `Docenten laden`);
-    });
+        if (!silent) updateProgress(0, teacherTasks.length, 'Docenten laden');
+        const teacherResults = await parallelFetch(teacherTasks, (done, total) => {
+            if (!silent) updateProgress(done, total, `Docenten laden`);
+        });
 
-    // Parse teacher results
-    let teachersWithData = 0;
-    for (let i = 0; i < teacherCodes.length; i++) {
-        const code = teacherCodes[i];
-        const data = teacherResults[i];
-        if (!data) continue;
-        const appts = parseLiveschedule(data);
-        if (appts.length > 0) {
-            state.teacherAppointments[code] = appts;
-            teachersWithData++;
+        // Parse teacher results
+        let teachersWithData = 0;
+        for (let i = 0; i < teacherCodes.length; i++) {
+            const code = teacherCodes[i];
+            const data = teacherResults[i];
+            if (!data) continue;
+            const appts = parseLiveschedule(data);
+            if (appts.length > 0) {
+                state.teacherAppointments[code] = appts;
+                teachersWithData++;
+            }
         }
+        console.log(`Teachers with schedule data: ${teachersWithData}/${teacherCodes.length}`);
+
+        // Save to cache
+        await WeekCache.set(weekCode, state.teacherAppointments);
     }
-    console.log(`Teachers with schedule data: ${teachersWithData}/${teacherCodes.length}`);
 
     // Build group appointments from teacher data
     // Store ALL groups (mentor + cluster) so bovenbouw per-student schedules can be built
@@ -1455,7 +1507,7 @@ function computeIndicators() {
     console.log('Scores:', {
         docentSGL: state.docentScoresByLocation.alle.score,
         obSGL: state.leerlingScoresByLocation.alle.onderbouw.score,
-        bvSGL: state.leerlingScoresByLocation.alle.bovenbouw.score,
+        bbSGL: state.leerlingScoresByLocation.alle.bovenbouw.score,
     });
 }
 
@@ -1650,15 +1702,22 @@ function renderScoreCards() {
         const obScore = getScore(loc, 'onderbouwScore', state.leerlingScoresByLocation?.[loc]?.onderbouw?.score);
         const bvScore = getScore(loc, 'bovenbouwScore', state.leerlingScoresByLocation?.[loc]?.bovenbouw?.score);
 
-        html += `<div class="doc-score-card">
-            <div class="doc-score-label">${label}</div>
-            <div class="doc-score-number" style="color:${c.text}">${fmt(docScore)}</div>
-            <div class="score-breakdown">
-                <span class="score-line" style="color:${locColor(loc, 'onderbouw').text}">OB ${fmt(obScore)}</span>
-                <span class="score-line" style="color:${locColor(loc, 'bovenbouw').text}">BV ${fmt(bvScore)}</span>
-            </div>
-            <div class="doc-score-sub">${subLabel}</div>
-        </div>`;
+        if (state.activeTab === 'docenten') {
+            html += `<div class="doc-score-card">
+                <div class="doc-score-label">${label}</div>
+                <div class="doc-score-number" style="color:${c.text}">${fmt(docScore)}</div>
+                <div class="doc-score-sub">${subLabel}</div>
+            </div>`;
+        } else {
+            html += `<div class="doc-score-card">
+                <div class="doc-score-label">${label}</div>
+                <div class="score-breakdown">
+                    <span class="score-line" style="color:${locColor(loc, 'onderbouw').text}">OB ${fmt(obScore)}</span>
+                    <span class="score-line" style="color:${locColor(loc, 'bovenbouw').text}">BB ${fmt(bvScore)}</span>
+                </div>
+                <div class="doc-score-sub">${subLabel}</div>
+            </div>`;
+        }
     }
     container.innerHTML = html;
 }
@@ -1871,8 +1930,8 @@ function renderLeerlingen() {
     if (!state.leerlingScoresByLocation) return;
 
     const sub = state.leerlingSubFilter;
-    const showOnderbouw = sub === 'alle' || sub === 'onderbouw';
-    const showBovenbouw = sub === 'alle' || sub === 'bovenbouw';
+    const showOnderbouw = sub === 'onderbouw';
+    const showBovenbouw = sub === 'bovenbouw';
 
     const onderbouwEl = document.getElementById('ll-onderbouw-section');
     const bovenbouwEl = document.getElementById('ll-bovenbouw-section');
@@ -1880,7 +1939,6 @@ function renderLeerlingen() {
     if (bovenbouwEl) bovenbouwEl.classList.toggle('hidden', !showBovenbouw);
 
     if (showOnderbouw) {
-        renderLeerlingScoreCards('ll-ob-score-cards', 'onderbouw');
         renderLeerlingScoreTrend('ll-ob-score-trend-section', 'chart-ll-ob-score-trend', 'onderbouw', 'llObScoreTrend');
         renderLeerlingMetricTable('ll-ob-metric-table', 'll-ob-metric-table-header', 'onderbouw');
         renderLeerlingMetricTrend('ll-ob-metric-trend-section', 'chart-ll-ob-metric-trend', 'onderbouw', 'llObMetricTrend');
@@ -1888,11 +1946,7 @@ function renderLeerlingen() {
 
     if (showBovenbouw) {
         const hasBV = state.leerlingMetrics?.bovenbouw != null;
-        const cardsEl = document.getElementById('ll-bv-score-cards');
         if (!hasBV) {
-            if (cardsEl) cardsEl.innerHTML =
-                '<div class="doc-score-card" style="grid-column:1/-1;text-align:center">' +
-                '<div class="doc-score-sub">Upload een CumLaude Excel (bovenbouw) voor per-leerling analyse</div></div>';
             // Hide trend/table/metric sections when no bovenbouw data
             document.getElementById('ll-bv-score-trend-section')?.classList.add('hidden');
             document.getElementById('ll-bv-metric-trend-section')?.classList.add('hidden');
@@ -1901,7 +1955,6 @@ function renderLeerlingen() {
         } else {
             const bvTableSection = document.getElementById('ll-bv-metric-table')?.closest('.chart-section');
             if (bvTableSection) bvTableSection.style.display = '';
-            renderLeerlingScoreCards('ll-bv-score-cards', 'bovenbouw');
             renderLeerlingScoreTrend('ll-bv-score-trend-section', 'chart-ll-bv-score-trend', 'bovenbouw', 'llBvScoreTrend');
             renderLeerlingMetricTable('ll-bv-metric-table', 'll-bv-metric-table-header', 'bovenbouw');
             renderLeerlingMetricTrend('ll-bv-metric-trend-section', 'chart-ll-bv-metric-trend', 'bovenbouw', 'llBvMetricTrend');
@@ -1909,35 +1962,6 @@ function renderLeerlingen() {
     }
 }
 
-function renderLeerlingScoreCards(containerId, bouw) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const stored = JSON.parse(localStorage.getItem('rooster_scores') || '{}');
-    const entries = filterVacationWeeks(Object.values(stored));
-    const useAvg = entries.length >= 2;
-    const scoreKey = bouw === 'onderbouw' ? 'onderbouwScore' : 'bovenbouwScore';
-
-    let html = '';
-    for (const loc of ['alle', 'Athena', 'Socrates']) {
-        const label = loc === 'alle' ? 'SGL' : loc;
-        let score;
-        if (useAvg) {
-            const vals = entries.map(e => e[loc]?.[scoreKey]).filter(v => v != null);
-            score = vals.length > 0 ? +(vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : null;
-        } else {
-            score = state.leerlingScoresByLocation?.[loc]?.[bouw]?.score ?? null;
-        }
-        const displayScore = score != null ? (score >= 0 ? '+' + score : score) : '-';
-        const c = locColor(loc, bouw);
-        html += `<div class="doc-score-card">
-            <div class="doc-score-label">${label}</div>
-            <div class="doc-score-number" style="color:${c.text}">${displayScore}</div>
-            <div class="doc-score-sub">${useAvg ? `gem. ${entries.length} weken` : 'huidige week'}</div>
-        </div>`;
-    }
-    container.innerHTML = html;
-}
 
 function renderLeerlingScoreTrend(sectionId, canvasId, bouw, chartKey) {
     const section = document.getElementById(sectionId);
@@ -2282,8 +2306,8 @@ function deduplicatePendelBewegingen(bewegingen) {
 }
 
 /**
- * Filter vacation weeks from stored score entries.
- * Detects on-the-fly: weeks with < 30% of median lesson count.
+ * Filter special weeks (vacations, intro, exam, project) from stored scores.
+ * Weeks with < 65% of median lesson count are excluded.
  */
 function filterVacationWeeks(entries) {
     const withLessons = entries.filter(e => e.totalLessons > 0);
@@ -2294,7 +2318,7 @@ function filterVacationWeeks(entries) {
 
     const counts = withLessons.map(e => e.totalLessons).sort((a, b) => a - b);
     const median = counts[Math.floor(counts.length / 2)];
-    const threshold = median * 0.3;
+    const threshold = median * 0.65;
 
     // Exclude: weeks without lesson count (legacy data) AND weeks below threshold
     return entries
