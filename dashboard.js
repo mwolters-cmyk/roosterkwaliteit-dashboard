@@ -48,13 +48,17 @@ let state = {
     locationToBranch: {},  // locationName -> branchName (Athena/Socrates)
     mentorGroups: [],      // [{name, branchName}]
     allTeacherCodes: [],   // ['aal', 'abc', ...]
+    // CumLaude bovenbouw data
+    cumLaudeStudents: null, // {leerlingnummer -> {klas, leerjaar, lesgroepen: [...]}} or null
     // Weekly schedule data
-    groupAppointments: {}, // groupName -> [appointment]
+    groupAppointments: {}, // groupName -> [appointment] (mentor groups + cluster groups)
     teacherAppointments: {},// teacherCode -> [appointment]
     // Computed metrics
     docentMetrics: null,
     leerlingMetrics: null,
     achterafMetrics: null,
+    // UI state
+    leerlingSubFilter: 'alle',  // 'alle', 'onderbouw', 'bovenbouw'
     // Charts
     charts: {},
     sortState: {},
@@ -124,6 +128,98 @@ function updateProgress(done, total, label) {
     document.getElementById('progress-fill').style.width = pct + '%';
     document.getElementById('progress-text').textContent =
         label ? `${label} (${done}/${total})` : `${done}/${total} geladen...`;
+}
+
+// ================================================================
+// CUMLAUDE EXCEL PARSING
+// ================================================================
+
+/**
+ * Parse CumLaude Excel: extract leerlingnummer -> {klas, leerjaar, lesgroepen}
+ * Expects headers in row 5 (0-indexed), data from row 6+.
+ * Key columns: Klas, Leerjaar, Leerlingnummer, Lesgroep
+ */
+function parseCumLaudeExcel(workbook) {
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    // Find header row (first row containing 'Leerlingnummer')
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+        if (rows[i] && rows[i].some(c => String(c) === 'Leerlingnummer')) {
+            headerIdx = i;
+            break;
+        }
+    }
+    if (headerIdx < 0) throw new Error('Header rij met "Leerlingnummer" niet gevonden');
+
+    const headers = rows[headerIdx].map(h => String(h || ''));
+    const colKlas = headers.indexOf('Klas');
+    const colLeerjaar = headers.indexOf('Leerjaar');
+    const colLnr = headers.indexOf('Leerlingnummer');
+    const colLesgroep = headers.indexOf('Lesgroep');
+
+    if (colLnr < 0 || colLesgroep < 0) {
+        throw new Error('Kolommen "Leerlingnummer" en/of "Lesgroep" niet gevonden');
+    }
+
+    const students = {};
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        const lnr = row[colLnr];
+        const lesgroep = row[colLesgroep];
+        if (!lnr || !lesgroep) continue;
+
+        const key = String(Math.round(Number(lnr)));
+        if (!students[key]) {
+            students[key] = {
+                klas: String(row[colKlas] || ''),
+                leerjaar: Math.round(Number(row[colLeerjaar] || 0)),
+                lesgroepen: new Set(),
+            };
+        }
+        students[key].lesgroepen.add(String(lesgroep));
+    }
+
+    // Convert Sets to Arrays
+    for (const s of Object.values(students)) {
+        s.lesgroepen = [...s.lesgroepen];
+    }
+
+    return students;
+}
+
+function initCumLaudeUpload() {
+    const input = document.getElementById('cumlaude-upload');
+    const statusEl = document.getElementById('cumlaude-status');
+    const label = document.getElementById('cumlaude-label');
+
+    input.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        statusEl.textContent = 'Verwerken...';
+        try {
+            const data = await file.arrayBuffer();
+            const wb = XLSX.read(data, { type: 'array' });
+            state.cumLaudeStudents = parseCumLaudeExcel(wb);
+
+            const count = Object.keys(state.cumLaudeStudents).length;
+            statusEl.textContent = `✓ ${count} leerlingen`;
+            label.classList.add('loaded');
+            console.log(`CumLaude: ${count} bovenbouw leerlingen geladen`);
+
+            // Re-render if data already loaded
+            if (state.docentMetrics) {
+                computeAllMetrics();
+                renderDashboard();
+            }
+        } catch (err) {
+            statusEl.textContent = 'Fout: ' + err.message;
+            console.error('CumLaude parse error:', err);
+        }
+    });
 }
 
 // ================================================================
@@ -277,18 +373,15 @@ async function loadWeekData(weekCode) {
     console.log(`Teachers with schedule data: ${teachersWithData}/${teacherCodes.length}`);
 
     // Build group appointments from teacher data
-    // Each appointment has a 'groups' field listing which groups are in that lesson
+    // Store ALL groups (mentor + cluster) so bovenbouw per-student schedules can be built
     const mentorGroupNames = new Set(state.mentorGroups.map(g => g.name));
     for (const [, appts] of Object.entries(state.teacherAppointments)) {
         for (const a of appts) {
             for (const groupName of a.groups) {
-                // Match to mentor groups (e.g., "1k" is a mentor group, "6.wisa1" is not)
-                if (mentorGroupNames.has(groupName)) {
-                    if (!state.groupAppointments[groupName]) {
-                        state.groupAppointments[groupName] = [];
-                    }
-                    state.groupAppointments[groupName].push(a);
+                if (!state.groupAppointments[groupName]) {
+                    state.groupAppointments[groupName] = [];
                 }
+                state.groupAppointments[groupName].push(a);
             }
         }
     }
@@ -551,9 +644,15 @@ function checkReistijd(dayLessons, locationToBranch) {
 // METRIC CALCULATIONS — LEERLINGEN
 // ================================================================
 
+function getYearFromGroupName(name) {
+    const match = String(name).match(/^(\d)/);
+    return match ? parseInt(match[1]) : 0;
+}
+
 function computeLeerlingMetrics() {
     const metrics = {
-        klassen: [],
+        klassen: [],            // onderbouw (1-3) klas metrics
+        bovenbouw: null,        // {klassen, vakgroepen} when CumLaude data present
         totalKlassen: 0,
         avgTussenuren: 0,
         mentorRand: 0,
@@ -563,7 +662,11 @@ function computeLeerlingMetrics() {
     let totalMentorLessen = 0;
     let mentorAanRand = 0;
 
+    // === ONDERBOUW (jaar 1-3): analyse per mentorgroep ===
     for (const group of state.mentorGroups) {
+        const year = getYearFromGroupName(group.name);
+        if (year >= 4) continue; // bovenbouw apart
+
         const appts = state.groupAppointments[group.name];
         if (!appts || appts.length === 0) continue;
 
@@ -724,7 +827,204 @@ function computeLeerlingMetrics() {
         ? ((metrics.klassen.reduce((s, k) => s + k.lateUren8 + k.lateUren9, 0)) / metrics.totalKlassen).toFixed(1)
         : 0;
 
+    // === BOVENBOUW (jaar 4-6): per-leerling analyse via CumLaude ===
+    if (state.cumLaudeStudents) {
+        metrics.bovenbouw = computeBovenbouwMetrics();
+    }
+
     return metrics;
+}
+
+function computeBovenbouwMetrics() {
+    const result = {
+        klassen: [],        // per-klas aggregated student metrics
+        vakgroepBlokuren: [], // blokuren from vakgroepen
+        totalStudents: 0,
+        avgTussenuren: 0,
+        avgLateUren: 0,
+    };
+
+    // Case-insensitive lookup for group appointments
+    const groupApptLower = {};
+    for (const [name, appts] of Object.entries(state.groupAppointments)) {
+        groupApptLower[name.toLowerCase()] = appts;
+    }
+
+    // Group CumLaude students by klas (mentor group)
+    const studentsByKlas = {};
+    for (const [lnr, student] of Object.entries(state.cumLaudeStudents)) {
+        if (!studentsByKlas[student.klas]) studentsByKlas[student.klas] = [];
+        studentsByKlas[student.klas].push({ lnr, ...student });
+    }
+
+    let allStudentTussenuren = 0;
+    let allStudentLate = 0;
+    let totalStudentCount = 0;
+
+    for (const [klasName, students] of Object.entries(studentsByKlas)) {
+        const perStudent = [];
+
+        for (const student of students) {
+            // Collect all appointments for this student
+            const apptMap = new Map();
+
+            // 1. Mentor group appointments
+            const mentorAppts = groupApptLower[klasName.toLowerCase()] || [];
+            for (const a of mentorAppts) {
+                const key = `${a.day}-${a.slot}-${a.subjects.join(',')}-${a.teachers.join(',')}`;
+                if (!apptMap.has(key)) apptMap.set(key, a);
+            }
+
+            // 2. Cluster group appointments (skip stamklas format like "4g-entl")
+            for (const lesgroep of student.lesgroepen) {
+                if (lesgroep.includes('-')) continue;
+                const appts = groupApptLower[lesgroep.toLowerCase()];
+                if (!appts) continue;
+                for (const a of appts) {
+                    const key = `${a.day}-${a.slot}-${a.subjects.join(',')}-${a.teachers.join(',')}`;
+                    if (!apptMap.has(key)) apptMap.set(key, a);
+                }
+            }
+
+            const activeLessons = [...apptMap.values()].filter(a =>
+                !a.cancelled && a.slot > 0 && a.type === 'lesson' &&
+                !a.subjects.some(s => EXCLUDED_SUBJECTS.has(s.toLowerCase()))
+            );
+
+            // Per day analysis
+            const byDay = {};
+            for (const a of activeLessons) {
+                if (!byDay[a.day]) byDay[a.day] = [];
+                byDay[a.day].push(a);
+            }
+
+            let tussenuren = 0;
+            let lateUren8 = 0;
+            let lateUren9 = 0;
+            const tussenPerDag = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+            const laatsteUur = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+
+            for (const day of [1, 2, 3, 4, 5]) {
+                const dayLessons = byDay[day] || [];
+                if (dayLessons.length === 0) continue;
+                const slots = [...new Set(dayLessons.map(a => a.slot))].sort((a, b) => a - b);
+
+                laatsteUur[day] = slots[slots.length - 1];
+
+                if (slots.length >= 2) {
+                    for (let s = slots[0] + 1; s < slots[slots.length - 1]; s++) {
+                        if (!slots.includes(s)) {
+                            tussenPerDag[day]++;
+                            tussenuren++;
+                        }
+                    }
+                }
+
+                for (const s of slots) {
+                    if (s === 8) lateUren8++;
+                    if (s >= 9) lateUren9++;
+                }
+            }
+
+            perStudent.push({
+                totalLessons: activeLessons.length,
+                tussenuren,
+                tussenPerDag,
+                lateUren8,
+                lateUren9,
+                laatsteUur,
+            });
+        }
+
+        if (perStudent.length === 0) continue;
+
+        const mentorGroup = state.mentorGroups.find(g => g.name === klasName);
+        const avgTussen = perStudent.reduce((s, m) => s + m.tussenuren, 0) / perStudent.length;
+        const avgLate = perStudent.reduce((s, m) => s + m.lateUren8 + m.lateUren9, 0) / perStudent.length;
+
+        allStudentTussenuren += perStudent.reduce((s, m) => s + m.tussenuren, 0);
+        allStudentLate += perStudent.reduce((s, m) => s + m.lateUren8 + m.lateUren9, 0);
+        totalStudentCount += perStudent.length;
+
+        // Compute avg tussenuren per dag
+        const avgTussenPerDag = {};
+        for (const d of [1, 2, 3, 4, 5]) {
+            avgTussenPerDag[d] = +(perStudent.reduce((s, m) => s + m.tussenPerDag[d], 0) / perStudent.length).toFixed(1);
+        }
+
+        // Compute avg laatste uur per dag
+        const avgLaatsteUur = {};
+        for (const d of [1, 2, 3, 4, 5]) {
+            const withLessons = perStudent.filter(m => m.laatsteUur[d] > 0);
+            avgLaatsteUur[d] = withLessons.length > 0
+                ? Math.round(withLessons.reduce((s, m) => s + m.laatsteUur[d], 0) / withLessons.length)
+                : 0;
+        }
+
+        result.klassen.push({
+            name: klasName,
+            branchName: mentorGroup?.branchName || 'Onbekend',
+            leerjaar: getYearFromGroupName(klasName),
+            studentCount: perStudent.length,
+            avgLessons: +(perStudent.reduce((s, m) => s + m.totalLessons, 0) / perStudent.length).toFixed(1),
+            avgTussenuren: +avgTussen.toFixed(1),
+            maxTussenuren: Math.max(...perStudent.map(m => m.tussenuren)),
+            avgTussenPerDag: avgTussenPerDag,
+            avgLateUren: +avgLate.toFixed(1),
+            avgLaatsteUur: avgLaatsteUur,
+            studentsWithTussenuren: perStudent.filter(m => m.tussenuren > 0).length,
+        });
+    }
+
+    result.klassen.sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
+    result.totalStudents = totalStudentCount;
+    result.avgTussenuren = totalStudentCount > 0 ? +(allStudentTussenuren / totalStudentCount).toFixed(2) : 0;
+    result.avgLateUren = totalStudentCount > 0 ? +(allStudentLate / totalStudentCount).toFixed(1) : 0;
+
+    // Bovenbouw vakgroep blokuren analysis
+    const bovenbouwGroupPattern = /^[456]s?\./i;
+    for (const [groupName, appts] of Object.entries(state.groupAppointments)) {
+        if (!bovenbouwGroupPattern.test(groupName)) continue;
+
+        const activeLessons = appts.filter(a =>
+            !a.cancelled && a.slot > 0 && a.type === 'lesson' &&
+            !a.subjects.some(s => EXCLUDED_SUBJECTS.has(s.toLowerCase()))
+        );
+        if (activeLessons.length === 0) continue;
+
+        const byDay = {};
+        for (const a of activeLessons) {
+            if (!byDay[a.day]) byDay[a.day] = [];
+            byDay[a.day].push(a);
+        }
+
+        for (const day of [1, 2, 3, 4, 5]) {
+            const dayLessons = byDay[day] || [];
+            if (dayLessons.length < 2) continue;
+            dayLessons.sort((a, b) => a.slot - b.slot);
+            for (let i = 1; i < dayLessons.length; i++) {
+                const prev = dayLessons[i - 1];
+                const curr = dayLessons[i];
+                if (curr.slot === prev.slot + 1) {
+                    const sharedSubjects = prev.subjects.filter(s =>
+                        curr.subjects.includes(s) && !EXCLUDED_SUBJECTS.has(s.toLowerCase())
+                    );
+                    for (const vak of sharedSubjects) {
+                        result.vakgroepBlokuren.push({
+                            groep: groupName,
+                            vak,
+                            day,
+                            slots: `${prev.slot}-${curr.slot}`,
+                            isOk: BLOKUUR_OK_SUBJECTS.has(vak.toLowerCase()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    console.log(`Bovenbouw: ${result.klassen.length} klassen, ${result.totalStudents} leerlingen, ${result.vakgroepBlokuren.length} blokuren`);
+    return result;
 }
 
 // ================================================================
@@ -1190,42 +1490,45 @@ function renderLeerlingen() {
     const m = state.leerlingMetrics;
     if (!m) return;
 
-    const klassen = filterKlassenByLocation(m.klassen);
+    const sub = state.leerlingSubFilter;
+    const showOnderbouw = sub === 'alle' || sub === 'onderbouw';
+    const showBovenbouw = sub === 'alle' || sub === 'bovenbouw';
 
-    // KPIs
-    setText('kpi-ll-klassen', klassen.length);
-    const avgT = klassen.length > 0
-        ? (klassen.reduce((s, k) => s + k.tussenuren.totaal, 0) / (klassen.length * 5)).toFixed(2) : 0;
-    setText('kpi-ll-tussenuren', avgT);
+    // Toggle section visibility
+    const onderbouwEl = document.getElementById('ll-onderbouw-section');
+    const bovenbouwEl = document.getElementById('ll-bovenbouw-section');
+    if (onderbouwEl) onderbouwEl.classList.toggle('hidden', !showOnderbouw);
+    if (bovenbouwEl) bovenbouwEl.classList.toggle('hidden', !showBovenbouw);
 
-    const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
-    const randMentor = klassen.reduce((s, k) => s + k.mentorAanRand, 0);
-    setText('kpi-ll-mentor', totalMentor > 0 ? Math.round((randMentor / totalMentor) * 100) + '%' : '-');
+    if (showOnderbouw) {
+        const klassen = filterKlassenByLocation(m.klassen);
 
-    const avg8 = klassen.length > 0
-        ? (klassen.reduce((s, k) => s + k.lateUren8 + k.lateUren9, 0) / klassen.length).toFixed(1) : 0;
-    setText('kpi-ll-late', avg8);
+        // KPIs (onderbouw)
+        setText('kpi-ll-klassen', klassen.length);
+        const avgT = klassen.length > 0
+            ? (klassen.reduce((s, k) => s + k.tussenuren.totaal, 0) / (klassen.length * 5)).toFixed(2) : 0;
+        setText('kpi-ll-tussenuren', avgT);
 
-    // Management summary
-    renderLeerlingenSummary(klassen);
+        const totalMentor = klassen.reduce((s, k) => s + k.mentorLessen, 0);
+        const randMentor = klassen.reduce((s, k) => s + k.mentorAanRand, 0);
+        setText('kpi-ll-mentor', totalMentor > 0 ? Math.round((randMentor / totalMentor) * 100) + '%' : '-');
 
-    // Tussenuren
-    renderLeerlingenTussenuren(klassen);
+        const avg8 = klassen.length > 0
+            ? (klassen.reduce((s, k) => s + k.lateUren8 + k.lateUren9, 0) / klassen.length).toFixed(1) : 0;
+        setText('kpi-ll-late', avg8);
 
-    // Mentoruren
-    renderLeerlingenMentor(klassen);
+        renderLeerlingenSummary(klassen);
+        renderLeerlingenTussenuren(klassen);
+        renderLeerlingenMentor(klassen);
+        renderLeerlingenKlasgrootte(klassen);
+        renderLeerlingenDaglengte(klassen);
+        renderLeerlingenBlokuren(klassen);
+        renderLeerlingenSpreiding(klassen);
+    }
 
-    // Klasgrootte
-    renderLeerlingenKlasgrootte(klassen);
-
-    // Daglengte
-    renderLeerlingenDaglengte(klassen);
-
-    // Blokuren
-    renderLeerlingenBlokuren(klassen);
-
-    // Lesspreiding
-    renderLeerlingenSpreiding(klassen);
+    if (showBovenbouw) {
+        renderBovenbouw();
+    }
 }
 
 function filterKlassenByLocation(klassen) {
@@ -1542,6 +1845,189 @@ function renderLeerlingenSpreiding(klassen) {
 }
 
 // ================================================================
+// RENDERING — BOVENBOUW
+// ================================================================
+
+function renderBovenbouw() {
+    const m = state.leerlingMetrics;
+    const bv = m?.bovenbouw;
+    const summaryEl = document.getElementById('bv-summary');
+    const kpiEl = document.getElementById('bv-kpi-section');
+    const dataEl = document.getElementById('bv-data-section');
+
+    if (!bv) {
+        // No CumLaude data uploaded
+        if (summaryEl) summaryEl.innerHTML =
+            '<h3>Bovenbouw (4-6)</h3>' +
+            '<p>Upload een CumLaude Excel-bestand (met alle bovenbouw lesgroepen) om per-leerling roosteranalyse te zien. ' +
+            'Zonder CumLaude data zijn bovenbouw-analyses niet beschikbaar omdat leerlingen individuele vakkenpakketten hebben.</p>';
+        if (kpiEl) kpiEl.classList.add('hidden');
+        if (dataEl) dataEl.classList.add('hidden');
+        return;
+    }
+
+    if (kpiEl) kpiEl.classList.remove('hidden');
+    if (dataEl) dataEl.classList.remove('hidden');
+
+    const klassen = filterKlassenByLocation(bv.klassen);
+
+    // KPIs
+    setText('kpi-bv-leerlingen', bv.totalStudents);
+    setText('kpi-bv-klassen', klassen.length);
+    setText('kpi-bv-tussenuren', bv.avgTussenuren);
+    setText('kpi-bv-late', bv.avgLateUren);
+
+    // Summary
+    renderBovenbouwSummary(klassen, bv);
+
+    // Tussenuren table
+    renderBovenbouwTussenuren(klassen);
+
+    // Daglengte heatmap
+    renderBovenbouwDaglengte(klassen);
+
+    // Blokuren
+    renderBovenbouwBlokuren(bv.vakgroepBlokuren);
+}
+
+function renderBovenbouwSummary(klassen, bv) {
+    const el = document.getElementById('bv-summary');
+    if (!el) return;
+
+    let html = '<h3>Samenvatting Bovenbouw (4-6)</h3>';
+    html += `<p>${bv.totalStudents} leerlingen in ${klassen.length} klassen geanalyseerd (per-leerling via CumLaude). `;
+
+    if (bv.avgTussenuren <= 1) {
+        html += `Gemiddeld <span class="good">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
+    } else if (bv.avgTussenuren <= 3) {
+        html += `Gemiddeld <span class="warn">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
+    } else {
+        html += `Gemiddeld <span class="bad">${bv.avgTussenuren}</span> tussenuren per leerling per week. `;
+    }
+
+    // Worst klassen
+    const worst = [...klassen].sort((a, b) => b.avgTussenuren - a.avgTussenuren).slice(0, 3)
+        .filter(k => k.avgTussenuren > 0);
+    if (worst.length > 0) {
+        html += `Meeste tussenuren: ${worst.map(k =>
+            `<strong>${k.name}</strong> (gem. ${k.avgTussenuren})`
+        ).join(', ')}. `;
+    }
+
+    const problemBlokuren = bv.vakgroepBlokuren.filter(b => !b.isOk).length;
+    if (problemBlokuren > 0) {
+        html += `<span class="warn">${problemBlokuren}</span> onwenselijke blokuren in vakgroepen. `;
+    }
+
+    html += '</p>';
+    el.innerHTML = html;
+}
+
+function renderBovenbouwTussenuren(klassen) {
+    const tbody = document.querySelector('#bv-tussenuren-table tbody');
+    if (!tbody) return;
+
+    const sorted = [...klassen].sort((a, b) => b.avgTussenuren - a.avgTussenuren);
+
+    tbody.innerHTML = sorted.map(k => {
+        const cells = [1, 2, 3, 4, 5].map(d => {
+            const v = k.avgTussenPerDag[d];
+            const cls = v === 0 ? 'good' : v <= 0.3 ? 'warn' : 'bad';
+            return `<td class="num"><span class="badge ${cls}">${v}</span></td>`;
+        }).join('');
+        const avgCls = k.avgTussenuren === 0 ? 'good' : k.avgTussenuren <= 2 ? 'warn' : 'bad';
+        return `<tr>
+            <td>${k.name}</td>
+            <td class="num">${k.studentCount}</td>
+            ${cells}
+            <td class="num"><span class="badge ${avgCls}">${k.avgTussenuren}</span></td>
+            <td class="num">${k.maxTussenuren}</td>
+        </tr>`;
+    }).join('');
+
+    // Bar chart: avg tussenuren per klas
+    const chartData = sorted.filter(k => k.avgTussenuren > 0).slice(0, 15);
+    if (state.charts.bvTussenuren) state.charts.bvTussenuren.destroy();
+    state.charts.bvTussenuren = new Chart(
+        document.getElementById('chart-bv-tussenuren'), {
+            type: 'bar',
+            data: {
+                labels: chartData.map(k => k.name),
+                datasets: [{
+                    label: 'Gem. tussenuren',
+                    data: chartData.map(k => k.avgTussenuren),
+                    backgroundColor: COLORS.red,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Gem. tussenuren per leerling' } },
+                },
+            },
+        }
+    );
+}
+
+function renderBovenbouwDaglengte(klassen) {
+    const container = document.getElementById('bv-daglengte-heatmap');
+    if (!container) return;
+
+    const sorted = [...klassen].sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true }));
+
+    let html = '<table class="heatmap-table"><thead><tr><th>Klas</th>';
+    for (const d of DAYS_LABELS) html += `<th>${d}</th>`;
+    html += '</tr></thead><tbody>';
+
+    for (const k of sorted) {
+        html += `<tr><td>${k.name}</td>`;
+        for (const d of [1, 2, 3, 4, 5]) {
+            const val = k.avgLaatsteUur[d];
+            let bg = '#f0f3f5';
+            let textColor = '#333';
+            if (val >= 9) { bg = 'rgba(231, 76, 60, 0.7)'; textColor = 'white'; }
+            else if (val >= 8) { bg = 'rgba(230, 126, 34, 0.6)'; textColor = 'white'; }
+            else if (val >= 7) { bg = 'rgba(241, 196, 15, 0.5)'; }
+            else if (val > 0) { bg = 'rgba(39, 174, 96, 0.3)'; }
+            html += `<td style="background:${bg};color:${textColor}">${val || '-'}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function renderBovenbouwBlokuren(blokuren) {
+    const tbody = document.querySelector('#bv-blokuren-table tbody');
+    if (!tbody) return;
+
+    // Sort: problematic first
+    const sorted = [...blokuren].sort((a, b) => {
+        if (a.isOk !== b.isOk) return a.isOk ? 1 : -1;
+        return a.groep.localeCompare(b.groep, 'nl', { numeric: true });
+    });
+
+    if (sorted.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">Geen blokuren gevonden</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = sorted.slice(0, 80).map(r => {
+        const statusCls = r.isOk ? 'good' : 'warn';
+        const statusText = r.isOk ? 'Normaal' : 'Onwenselijk';
+        return `<tr>
+            <td>${r.groep}</td>
+            <td>${r.vak}</td>
+            <td>${DAYS_LABELS[r.day - 1]}</td>
+            <td class="num">${r.slots}</td>
+            <td class="num"><span class="badge ${statusCls}">${statusText}</span></td>
+        </tr>`;
+    }).join('');
+}
+
+// ================================================================
 // RENDERING — ACHTERAF TAB
 // ================================================================
 
@@ -1825,6 +2311,17 @@ function initFilters() {
     });
 }
 
+function initLeerlingSubFilter() {
+    document.querySelectorAll('.ll-sub-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.ll-sub-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.leerlingSubFilter = btn.dataset.sub;
+            if (state.docentMetrics) renderDashboard();
+        });
+    });
+}
+
 function initLoadButton() {
     document.getElementById('btn-load').addEventListener('click', async () => {
         const weekCode = document.getElementById('week-select').value;
@@ -1911,13 +2408,16 @@ async function init() {
     populateWeekSelector();
     initTabs();
     initFilters();
+    initLeerlingSubFilter();
     initLoadButton();
     initTokenHandlers();
+    initCumLaudeUpload();
 
     // Init sortable tables
     const tableIds = [
         'doc-tussenuren-table', 'doc-lokaal-table', 'doc-pendel-table',
         'll-tussenuren-table', 'll-late-table', 'll-blokuren-table', 'll-spreiding-table',
+        'bv-tussenuren-table', 'bv-blokuren-table',
         'ach-docent-table',
     ];
     for (const id of tableIds) initSortableTable(id);
@@ -1931,6 +2431,9 @@ async function init() {
     // Load reference data
     await loadAndInit();
 }
+
+// Expose for debugging
+window.dashboardState = state;
 
 // Start
 document.addEventListener('DOMContentLoaded', init);

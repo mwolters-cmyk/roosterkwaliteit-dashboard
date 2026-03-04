@@ -6,6 +6,7 @@
     <title>Roosterkwaliteit Dashboard - Stedelijk Gymnasium Leiden</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -41,6 +42,13 @@
             <button class="filter-btn active" data-filter="alle">Alle</button>
             <button class="filter-btn" data-filter="Athena">Athena</button>
             <button class="filter-btn" data-filter="Socrates">Socrates</button>
+        </div>
+        <div class="filter-group">
+            <label>Bovenbouw:</label>
+            <label class="file-upload-btn" id="cumlaude-label">
+                <input type="file" id="cumlaude-upload" accept=".xlsx,.xls" hidden>
+                <span id="cumlaude-status">CumLaude uploaden</span>
+            </label>
         </div>
         <div id="progress-container" class="hidden">
             <div id="progress-bar"><div id="progress-fill"></div></div>
@@ -184,140 +192,241 @@
     <!-- ===================== TAB 2: LEERLINGEN ===================== -->
     <section id="tab-leerlingen" class="tab-content hidden">
 
-        <!-- Management Summary -->
-        <div id="ll-summary" class="mgmt-summary"></div>
-
-        <!-- KPI Cards -->
-        <div id="ll-kpi" class="kpi-section">
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ll-klassen">-</div>
-                <div class="kpi-label">Klassen</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ll-tussenuren">-</div>
-                <div class="kpi-label">Gem. tussenuren/dag</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ll-mentor">-</div>
-                <div class="kpi-label">Mentoruren aan rand</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-ll-late">-</div>
-                <div class="kpi-label">Gem. 8e/9e uren/week</div>
-            </div>
+        <!-- Sub-filter: Onderbouw / Bovenbouw -->
+        <div class="ll-sub-filter">
+            <button class="ll-sub-btn active" data-sub="alle">Alle</button>
+            <button class="ll-sub-btn" data-sub="onderbouw">Onderbouw (1-3)</button>
+            <button class="ll-sub-btn" data-sub="bovenbouw">Bovenbouw (4-6)</button>
         </div>
 
-        <!-- Tussenuren -->
-        <div class="chart-section">
-            <h2>Tussenuren per klas</h2>
-            <div class="chart-table-grid">
-                <div class="table-container">
-                    <table id="ll-tussenuren-table" class="data-table sortable">
-                        <thead>
-                            <tr>
-                                <th data-sort="name">Klas</th>
-                                <th data-sort="ma">Ma</th>
-                                <th data-sort="di">Di</th>
-                                <th data-sort="wo">Wo</th>
-                                <th data-sort="do">Do</th>
-                                <th data-sort="vr">Vr</th>
-                                <th data-sort="totaal">Totaal</th>
-                                <th data-sort="score">Score</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
+        <!-- ===== ONDERBOUW SECTION ===== -->
+        <div id="ll-onderbouw-section">
+
+            <!-- Management Summary -->
+            <div id="ll-summary" class="mgmt-summary"></div>
+
+            <!-- KPI Cards -->
+            <div id="ll-kpi" class="kpi-section">
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-ll-klassen">-</div>
+                    <div class="kpi-label">Klassen</div>
                 </div>
-                <div class="chart-container">
-                    <canvas id="chart-ll-tussenuren"></canvas>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-ll-tussenuren">-</div>
+                    <div class="kpi-label">Gem. tussenuren/dag</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-ll-mentor">-</div>
+                    <div class="kpi-label">Mentoruren aan rand</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-ll-late">-</div>
+                    <div class="kpi-label">Gem. 8e/9e uren/week</div>
                 </div>
             </div>
-        </div>
 
-        <!-- Mentoruren positie -->
-        <div class="chart-section">
-            <h2>Mentoruren positie</h2>
-            <div class="chart-container-wide">
-                <canvas id="chart-ll-mentor"></canvas>
-            </div>
-        </div>
-
-        <!-- Klasgrootte -->
-        <div class="chart-section">
-            <h2>Klasgrootte</h2>
-            <div class="chart-container-wide">
-                <canvas id="chart-ll-klasgrootte"></canvas>
-            </div>
-        </div>
-
-        <!-- Daglengte & Late uren -->
-        <div class="chart-section">
-            <h2>Daglengte &amp; Late uren</h2>
-            <div class="chart-table-grid">
-                <div class="table-container">
-                    <h3>Laatste lesuur per dag</h3>
-                    <div id="ll-daglengte-heatmap"></div>
-                </div>
-                <div class="table-container">
-                    <h3>8e/9e uren per klas</h3>
-                    <table id="ll-late-table" class="data-table sortable">
-                        <thead>
-                            <tr>
-                                <th data-sort="name">Klas</th>
-                                <th data-sort="uur8">8e uren</th>
-                                <th data-sort="uur9">9e uren</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
+            <!-- Tussenuren -->
+            <div class="chart-section">
+                <h2>Tussenuren per klas</h2>
+                <div class="chart-table-grid">
+                    <div class="table-container">
+                        <table id="ll-tussenuren-table" class="data-table sortable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Klas</th>
+                                    <th data-sort="ma">Ma</th>
+                                    <th data-sort="di">Di</th>
+                                    <th data-sort="wo">Wo</th>
+                                    <th data-sort="do">Do</th>
+                                    <th data-sort="vr">Vr</th>
+                                    <th data-sort="totaal">Totaal</th>
+                                    <th data-sort="score">Score</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="chart-ll-tussenuren"></canvas>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Blokuren -->
-        <div class="chart-section">
-            <h2>Blokuren</h2>
-            <p class="section-subtitle">Dubbele uren (2 opeenvolgende uren zelfde vak). Sommige vakken (LO, BV) hebben dit standaard; voor andere (wiskunde, talen) is dit onwenselijk.</p>
-            <div class="chart-table-grid">
+            <!-- Mentoruren positie -->
+            <div class="chart-section">
+                <h2>Mentoruren positie</h2>
+                <div class="chart-container-wide">
+                    <canvas id="chart-ll-mentor"></canvas>
+                </div>
+            </div>
+
+            <!-- Klasgrootte -->
+            <div class="chart-section">
+                <h2>Klasgrootte</h2>
+                <div class="chart-container-wide">
+                    <canvas id="chart-ll-klasgrootte"></canvas>
+                </div>
+            </div>
+
+            <!-- Daglengte & Late uren -->
+            <div class="chart-section">
+                <h2>Daglengte &amp; Late uren</h2>
+                <div class="chart-table-grid">
+                    <div class="table-container">
+                        <h3>Laatste lesuur per dag</h3>
+                        <div id="ll-daglengte-heatmap"></div>
+                    </div>
+                    <div class="table-container">
+                        <h3>8e/9e uren per klas</h3>
+                        <table id="ll-late-table" class="data-table sortable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Klas</th>
+                                    <th data-sort="uur8">8e uren</th>
+                                    <th data-sort="uur9">9e uren</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Blokuren -->
+            <div class="chart-section">
+                <h2>Blokuren</h2>
+                <p class="section-subtitle">Dubbele uren (2 opeenvolgende uren zelfde vak). Sommige vakken (LO, BV) hebben dit standaard; voor andere (wiskunde, talen) is dit onwenselijk.</p>
+                <div class="chart-table-grid">
+                    <div class="table-container">
+                        <table id="ll-blokuren-table" class="data-table sortable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="klas">Klas</th>
+                                    <th data-sort="vak">Vak</th>
+                                    <th data-sort="dag">Dag</th>
+                                    <th data-sort="slots">Uren</th>
+                                    <th data-sort="status">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="chart-ll-blokuren"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lesspreiding -->
+            <div class="chart-section">
+                <h2>Lesspreiding</h2>
+                <p class="section-subtitle">Vakken met slechte spreiding (alle lessen op 1-2 dagen)</p>
                 <div class="table-container">
-                    <table id="ll-blokuren-table" class="data-table sortable">
+                    <table id="ll-spreiding-table" class="data-table sortable">
                         <thead>
                             <tr>
                                 <th data-sort="klas">Klas</th>
                                 <th data-sort="vak">Vak</th>
-                                <th data-sort="dag">Dag</th>
-                                <th data-sort="slots">Uren</th>
-                                <th data-sort="status">Status</th>
+                                <th data-sort="lessen">Lessen/week</th>
+                                <th data-sort="dagen">Dagen</th>
+                                <th data-sort="score">Spreiding</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
                 </div>
-                <div class="chart-container">
-                    <canvas id="chart-ll-blokuren"></canvas>
+            </div>
+
+        </div><!-- end onderbouw section -->
+
+        <!-- ===== BOVENBOUW SECTION ===== -->
+        <div id="ll-bovenbouw-section">
+
+            <!-- Bovenbouw Summary -->
+            <div id="bv-summary" class="mgmt-summary"></div>
+
+            <!-- Bovenbouw KPI Cards -->
+            <div id="bv-kpi-section" class="kpi-section hidden">
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-bv-leerlingen">-</div>
+                    <div class="kpi-label">Leerlingen</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-bv-klassen">-</div>
+                    <div class="kpi-label">Klassen</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-bv-tussenuren">-</div>
+                    <div class="kpi-label">Gem. tussenuren/week</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value" id="kpi-bv-late">-</div>
+                    <div class="kpi-label">Gem. 8e/9e uren/week</div>
                 </div>
             </div>
-        </div>
 
-        <!-- Lesspreiding -->
-        <div class="chart-section">
-            <h2>Lesspreiding</h2>
-            <p class="section-subtitle">Vakken met slechte spreiding (alle lessen op 1-2 dagen)</p>
-            <div class="table-container">
-                <table id="ll-spreiding-table" class="data-table sortable">
-                    <thead>
-                        <tr>
-                            <th data-sort="klas">Klas</th>
-                            <th data-sort="vak">Vak</th>
-                            <th data-sort="lessen">Lessen/week</th>
-                            <th data-sort="dagen">Dagen</th>
-                            <th data-sort="score">Spreiding</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
+            <!-- Bovenbouw data sections -->
+            <div id="bv-data-section" class="hidden">
+
+                <!-- Tussenuren per klas (per-leerling gemiddelde) -->
+                <div class="chart-section">
+                    <h2>Tussenuren per klas (per-leerling gemiddelde)</h2>
+                    <p class="section-subtitle">Berekend op basis van individuele leerlingroosters via CumLaude lesgroep-koppeling</p>
+                    <div class="chart-table-grid">
+                        <div class="table-container">
+                            <table id="bv-tussenuren-table" class="data-table sortable">
+                                <thead>
+                                    <tr>
+                                        <th data-sort="name">Klas</th>
+                                        <th data-sort="n">N</th>
+                                        <th data-sort="ma">Ma</th>
+                                        <th data-sort="di">Di</th>
+                                        <th data-sort="wo">Wo</th>
+                                        <th data-sort="do">Do</th>
+                                        <th data-sort="vr">Vr</th>
+                                        <th data-sort="avg">Gem.</th>
+                                        <th data-sort="max">Max</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart-bv-tussenuren"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daglengte -->
+                <div class="chart-section">
+                    <h2>Gemiddeld laatste lesuur per dag</h2>
+                    <div id="bv-daglengte-heatmap"></div>
+                </div>
+
+                <!-- Blokuren vakgroepen -->
+                <div class="chart-section">
+                    <h2>Blokuren in vakgroepen</h2>
+                    <p class="section-subtitle">Dubbele uren in bovenbouw vakgroepen (4.wisa1, 5.biol2 etc.)</p>
+                    <div class="table-container">
+                        <table id="bv-blokuren-table" class="data-table sortable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="groep">Vakgroep</th>
+                                    <th data-sort="vak">Vak</th>
+                                    <th data-sort="dag">Dag</th>
+                                    <th data-sort="slots">Uren</th>
+                                    <th data-sort="status">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div><!-- end bv-data-section -->
+
+        </div><!-- end bovenbouw section -->
+
     </section>
 
     <!-- ===================== TAB 3: ACHTERAF ===================== -->

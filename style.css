@@ -102,6 +102,25 @@ main { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
     border-color: var(--primary);
 }
 
+/* File upload button */
+.file-upload-btn {
+    padding: 0.35rem 1rem;
+    border: 1px dashed var(--border);
+    border-radius: 20px;
+    background: white;
+    color: var(--text-light);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+.file-upload-btn:hover { border-color: var(--primary-light); color: var(--primary); }
+.file-upload-btn.loaded {
+    border-style: solid;
+    border-color: var(--success);
+    color: var(--success);
+    background: #eafaf1;
+}
+
 /* Progress bar */
 #progress-container {
     flex-basis: 100%;
@@ -429,6 +448,30 @@ footer {
 .btn-token-change:hover {
     border-color: white;
     color: white;
+}
+
+/* ===== Leerlingen Sub-filter ===== */
+.ll-sub-filter {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+.ll-sub-btn {
+    padding: 0.4rem 1.2rem;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+.ll-sub-btn:hover { border-color: var(--primary-light); color: var(--primary); }
+.ll-sub-btn.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
 }
 
 /* ===== Utility ===== */
