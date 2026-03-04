@@ -108,6 +108,7 @@ const DOCENT_METRICS = {
     M7: { label: 'Late uren (8e/9e)', weight: -2 },
     M8: { label: 'Pendel mét reistijd', weight: -2 },
     M9: { label: 'Pendel zónder reistijd', weight: -10 },
+    M10: { label: 'Klas >29 leerlingen', weight: -3 },
 };
 
 // ================================================================
@@ -1543,6 +1544,16 @@ function computeDocentScore(locationFilter) {
     ).length;
     metrics.M9 = +(pendelZonder / n * 100).toFixed(1);
 
+    // M10: docenten die minstens 1x lesgeeft aan klas/cluster >29 leerlingen
+    const groteklas = teachers.filter(t => {
+        const appts = state.teacherAppointments[t.code] || [];
+        return appts.some(a =>
+            !a.cancelled && a.slot > 0 && a.type === 'lesson' &&
+            a.expectedStudentCount > 29
+        );
+    }).length;
+    metrics.M10 = +(groteklas / n * 100).toFixed(1);
+
     // Gewogen score
     let score = 0;
     for (const [key, val] of Object.entries(metrics)) {
@@ -1886,6 +1897,7 @@ function renderDocentMetricTrend() {
         { key: 'M7', color: 'rgba(155, 89, 182, 0.85)', dash: [5, 3] },
         { key: 'M8', color: 'rgba(127, 140, 141, 0.85)', dash: [5, 3] },
         { key: 'M9', color: 'rgba(192, 57, 43, 0.9)', dash: [5, 3] },
+        { key: 'M10', color: 'rgba(142, 68, 173, 0.85)', dash: [5, 3] },
     ];
 
     const datasets = metricDefs.map(d => ({
